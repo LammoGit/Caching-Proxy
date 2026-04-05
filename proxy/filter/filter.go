@@ -14,11 +14,12 @@ type Filter struct {
 }
 
 func (filter *Filter) LoadRegex(pattern string) error {
-    filter.regex, err = regexp.Compile(pattern)
+    regex, err := regexp.Compile(pattern)
     if err != nil {
         return err
     }
 
+    filter.regex = regex
     filter.Valid = append(filter.Valid, pattern)
 
     return nil
