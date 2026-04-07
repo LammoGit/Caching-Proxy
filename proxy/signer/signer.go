@@ -10,15 +10,19 @@ import (
     "crypto/x509/pkix"
     "encoding/pem"
     "time"
+    "fmt"
     "os"
     "io"
+	"github.com/hashicorp/golang-lru/v2"
 )
 
-const KeySize int = 2048
+const KeySize int   = 2048
+const MaxCacheSize int = 128
 
 type Signer struct {
-    Cert  *x509.Certificate
-    Pk    *rsa.PrivateKey
+    Cert   *x509.Certificate
+    Pk     *rsa.PrivateKey
+    cache  *lru.Cache[string, *tls.Certificate]
 }
 
 func (signer *Signer) LoadOrCreate(certPath, keyPath string) error {
@@ -144,6 +148,24 @@ func (signer *Signer) GeneratePK() error {
 }
 
 func (signer *Signer) GenerateCertificate(url u.URL) (*tls.Certificate, error) {
+    hostname := url.Hostname()
+
+    if signer.cache == nil {
+        cache, err := lru.New[string, *tls.Certificate](MaxCacheSize)
+        if err != nil {
+            return nil, err
+        }
+        signer.cache = cache
+    }
+
+    if signer.cache.Contains(hostname) {
+        cert, ok := signer.cache.Get(hostname)
+        if ok {
+            fmt.Printf("Certificate cache hit for %s\n", hostname)
+            return cert, nil
+        }
+    }
+
     pk, err := rsa.GenerateKey(rand.Reader, KeySize)
     if err != nil {
         return nil, err
@@ -182,6 +204,8 @@ func (signer *Signer) GenerateCertificate(url u.URL) (*tls.Certificate, error) {
         Certificate: [][]byte{certBytes},
         PrivateKey: pk,
     }
+
+    signer.cache.Add(hostname, &tlsCert)
 
     return &tlsCert, nil
 }
