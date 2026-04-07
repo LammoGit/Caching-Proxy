@@ -1,4 +1,6 @@
 *.txt
 *.db
 *.sum
+*.cert
+*.key
 bin
