@@ -2,6 +2,8 @@ package main
 
 import (
     "flag"
+    "net"
+    "time"
     "net/http"
     "crypto/tls"
     "fmt"
@@ -58,8 +60,6 @@ func SaveResponse(body []byte, resp *http.Response, req *http.Request, matched R
     headers, _ := json.Marshal(resp.Header)
     hash := xxhash.Sum64(body)
     url := req.URL.String()
-
-    fmt.Printf("Saving %s to cache...\n", url)
 
     switch matched {
     case PageMatch:
@@ -252,14 +252,25 @@ func main() {
         panic(err)
     }
 
-    httpClient = &http.Client {}
+    transport := &http.Transport{
+        DialContext: (&net.Dialer{
+            Timeout:   5 * time.Second,
+            KeepAlive: 0,
+        }).DialContext,
+        TLSHandshakeTimeout:   5 * time.Second,
+        DisableKeepAlives:     true,
+        MaxIdleConns:          0,
+        IdleConnTimeout:       0,
+    }
+
+    httpClient = &http.Client {
+        Timeout:   10 * time.Second,
+        Transport: transport,
+    }
 
     server := &http.Server {
         Addr: *listenAddr,
         Handler: http.HandlerFunc(connHandler),
-        TLSConfig: &tls.Config {
-            InsecureSkipVerify: true,
-        },
     }
 
     fmt.Printf("Server started on %s\n", *listenAddr)
