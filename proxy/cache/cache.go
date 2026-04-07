@@ -2,13 +2,14 @@ package cache
 
 import (
     "database/sql"
+    "bytes"
+    "compress/gzip"
     "fmt"
-    "strings"
+    "io"
     _ "github.com/mattn/go-sqlite3"
 )
 
-const maxAssetBatchSize = 300
-const maxRelBatchSize = 499
+const gzipLevel = 9
 
 type Page struct {
     Url      string
@@ -20,6 +21,40 @@ type Page struct {
 type Cache struct {
     path  string
     db    *sql.DB
+}
+
+func Compress(content []byte) ([]byte, error) {
+    var buffer bytes.Buffer
+    gz, err := gzip.NewWriterLevel(&buffer, gzipLevel)
+    if err != nil {
+        return []byte{}, err
+    }
+
+    if _, err = gz.Write(content); err != nil {
+        return []byte{}, err
+    }
+
+    if err = gz.Close(); err != nil {
+        return []byte{}, err
+    }
+
+    return buffer.Bytes(), nil
+}
+
+func Decompress(compressed []byte) ([]byte, error) {
+    buffer := bytes.NewReader(compressed)
+    gz, err := gzip.NewReader(buffer)
+    if err != nil {
+        return []byte{}, err
+    }
+    defer gz.Close()
+
+    content, err := io.ReadAll(gz)
+    if err != nil {
+        return []byte{}, err
+    }
+
+    return content, nil
 }
 
 func (cache *Cache) Load(path string) error {
@@ -79,14 +114,24 @@ func (cache *Cache) Load(path string) error {
 }
 
 func (cache *Cache) AddPage(page Page) error {
-    _, err := cache.db.Exec(`
+    url := page.Url
+    headers, err := Compress(page.Headers)
+    if err != nil {
+        return err
+    }
+    content, err := Compress(page.Content)
+    if err != nil {
+        return err
+    }
+
+    _, err = cache.db.Exec(`
         INSERT INTO Pages(url, headers, content, hash)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(url) DO UPDATE SET
             content = excluded.content,
             hash = excluded.hash
         WHERE hash != excluded.hash
-    `, page.Url, page.Headers, page.Content, int64(page.Hash))
+    `, url, headers, content, int64(page.Hash))
     if err != nil {
         return fmt.Errorf("Insert/Update page: %s", err)
     }
@@ -107,6 +152,15 @@ func (cache *Cache) AddAsset(page_url string, asset Page) error {
         return fmt.Errorf("Select page_id by url - %s: %s", page_url, err)
     }
 
+    url := asset.Url
+    headers, err := Compress(asset.Headers)
+    if err != nil {
+        return err
+    }
+    content, err := Compress(asset.Content)
+    if err != nil {
+        return err
+    }
     var assetID int64
     err = tx.QueryRow(`
         INSERT INTO Assets(url, headers, content, hash)
@@ -116,7 +170,7 @@ func (cache *Cache) AddAsset(page_url string, asset Page) error {
             hash = excluded.hash
         WHERE hash != excluded.hash
         RETURNING id
-    `, asset.Url, asset.Headers, asset.Content, int64(asset.Hash)).Scan(&assetID)
+    `, url, headers, content, int64(asset.Hash)).Scan(&assetID)
     if err != nil {
         return fmt.Errorf("Asset insert: %s", err)
     }
@@ -128,102 +182,6 @@ func (cache *Cache) AddAsset(page_url string, asset Page) error {
     `, pageID, assetID)
     if err != nil {
         return fmt.Errorf("Insert page-asset links: %s", err)
-    }
-
-    return tx.Commit()
-}
-
-func (cache *Cache) AddAssets(page_url string, assets []Page) error {
-    tx, err := cache.db.Begin()
-    if err != nil {
-        return err
-    }
-    defer tx.Rollback()
-
-    var pageID int64
-    err = tx.QueryRow(`SELECT id FROM Pages WHERE url=?`, page_url).Scan(&pageID)
-    if err != nil {
-        return fmt.Errorf("Select page_id by url - %s: %s", page_url, err)
-    }
-
-    if len(assets) == 0 {
-        return tx.Commit()
-    }
-
-    assetIDs := make([]int64, 0, len(assets))
-    for start := 0; start < len(assets); start += maxAssetBatchSize {
-        end := start + maxAssetBatchSize
-        if end > len(assets) {
-            end = len(assets)
-        }
-        chunk := assets[start:end]
-
-        valueStrings := make([]string, len(chunk))
-        valueArgs := make([]interface{}, 0, len(chunk)*4)
-        for i, a := range chunk {
-            valueStrings[i] = "(?, ?, ?, ?)"
-            valueArgs = append(valueArgs, a.Url, a.Headers, a.Content, a.Hash)
-        }
-
-        query := fmt.Sprintf(`
-            INSERT INTO Assets(url, content, hash)
-            VALUES %s
-            ON CONFLICT(url) DO UPDATE SET
-                content = excluded.content,
-                hash = excluded.hash
-            WHERE hash != excluded.hash
-            RETURNING id
-        `, strings.Join(valueStrings, ","))
-
-        rows, err := tx.Query(query, valueArgs...)
-        if err != nil {
-            return fmt.Errorf("Batch asset insert chunk %d-%d: %s", start, end, err)
-        }
-        defer rows.Close()
-
-        for rows.Next() {
-            var id int64
-            if err := rows.Scan(&id); err != nil {
-                return err
-            }
-            assetIDs = append(assetIDs, id)
-        }
-        if err = rows.Err(); err != nil {
-            return err
-        }
-        if len(assetIDs) != end {
-            return fmt.Errorf("Returned %d asset IDs after %d assets", len(assetIDs), end)
-        }
-    }
-
-    if len(assetIDs) != len(assets) {
-        return fmt.Errorf("Returned %d asset IDs, expected %d", len(assetIDs), len(assets))
-    }
-
-    for start := 0; start < len(assetIDs); start += maxRelBatchSize {
-        end := start + maxRelBatchSize
-        if end > len(assetIDs) {
-            end = len(assetIDs)
-        }
-        chunkIDs := assetIDs[start:end]
-
-        relStrings := make([]string, len(chunkIDs))
-        relArgs := make([]interface{}, 0, len(chunkIDs)*2)
-        for i, aid := range chunkIDs {
-            relStrings[i] = "(?, ?)"
-            relArgs = append(relArgs, pageID, aid)
-        }
-
-        relQuery := fmt.Sprintf(`
-            INSERT INTO PagesAssets(page_id, asset_id)
-            VALUES %s
-            ON CONFLICT DO NOTHING
-        `, strings.Join(relStrings, ","))
-
-        _, err = tx.Exec(relQuery, relArgs...)
-        if err != nil {
-            return fmt.Errorf("Batch insert page-asset links chunk %d-%d: %s", start, end, err)
-        }
     }
 
     return tx.Commit()
@@ -241,6 +199,15 @@ func (cache *Cache) GetPage(url string) (Page, error) {
     `, url).Scan(&headers, &content, &hash)
     if err != nil {
         return Page {}, err
+    }
+
+    headers, err = Decompress(headers)
+    if err != nil {
+        return Page{}, err
+    }
+    content, err = Decompress(content)
+    if err != nil {
+        return Page{}, err
     }
 
     return Page {
@@ -263,6 +230,15 @@ func (cache *Cache) GetAsset(url string) (Page, error) {
     `, url).Scan(&headers, &content, &hash)
     if err != nil {
         return Page {}, err
+    }
+
+    headers, err = Decompress(headers)
+    if err != nil {
+        return Page{}, err
+    }
+    content, err = Decompress(content)
+    if err != nil {
+        return Page{}, err
     }
 
     return Page {
