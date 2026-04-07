@@ -28,7 +28,7 @@ func (filter *Filter) LoadRegex(pattern string) error {
 func (filter *Filter) Load(path string) error {
     file, err := os.Open(path)
     if err != nil {
-        return err
+        return filter.LoadRegex(path)
     }
     defer file.Close()
 

@@ -3,26 +3,32 @@ package main
 import (
     "flag"
     "net/http"
+    "crypto/tls"
     "fmt"
+    "bytes"
+    "bufio"
     "io"
     "strings"
     "encoding/json"
     "github.com/cespare/xxhash/v2"
     f "caching-proxy/filter"
     c "caching-proxy/cache"
+    s "caching-proxy/signer"
 )
 
 var (
     listenAddr   = flag.String("port", ":8080", "proxy listen address")
     dbPath       = flag.String("db", "./cache.db", "SQLite3 cache database filepath")
-    pattern      = flag.String("pattern", ".*", "URL regex pattern")
-    patternPath  = flag.String("patterns", "None", "URL regex patterns file")
+    patternPath  = flag.String("patterns", "", "URL regex patterns file")
+    certPath     = flag.String("cert", "./ca.cert", "CA certificate filepath")
+    keyPath      = flag.String("key", "./key.key", "RSA private key of CA filepath")
 )
 
 var (
     httpClient  *http.Client
     filter      f.Filter
     cache       c.Cache
+    signer      s.Signer
 )
 
 type RequestType int
@@ -86,9 +92,7 @@ func SaveResponse(body []byte, resp *http.Response, req *http.Request, matched R
     }
 }
 
-func LoadResponse(w http.ResponseWriter, req *http.Request, matched RequestType) error {
-    fmt.Printf("Loading %s from cache...\n", req.URL)
-
+func writeCachedResponse(w io.Writer, req *http.Request, matched RequestType) bool {
     var page c.Page
     var err error
 
@@ -102,60 +106,120 @@ func LoadResponse(w http.ResponseWriter, req *http.Request, matched RequestType)
     }
 
     if err != nil {
-        w.WriteHeader(http.StatusNotFound)
-        w.Write([]byte("404 Not Found\n"))
-        return err
+        fmt.Fprintf(w, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+        return false
     }
 
     var headers http.Header
     json.Unmarshal([]byte(page.Headers), &headers)
-    for k, v := range headers {
-        w.Header()[k] = v
-    }
-    w.WriteHeader(http.StatusOK)
-    w.Write(page.Content)
 
-    return nil
+    fmt.Fprintf(w, "HTTP/1.1 %d %s\r\n", http.StatusOK, http.StatusText(http.StatusOK))
+    if err := headers.Write(w); err != nil {
+        fmt.Printf("Failed to write headers: %v\n", err)
+        return false
+    }
+    headers.Write(w)
+    fmt.Fprintf(w, "\r\n")
+    if _, err := w.Write(page.Content); err != nil {
+        fmt.Printf("Failed to write body: %v\n", err)
+        return false
+    }
+    fmt.Println("Written", req.URL, "from cache")
+    return true
 }
 
-func handleHTTP(w http.ResponseWriter, req *http.Request) {
-    url := req.URL.String()
-    matched := Match(req)
-
-    fmt.Printf("HTTP %s %s\n", req.Method, url)
-    fmt.Printf("Headers of %s\n", url)
-    for k, v := range req.Header {
-        fmt.Println(k, v)
+func forwardRequest(w io.Writer, req *http.Request, matched RequestType) {
+    if req.URL.Scheme == "" {
+        if req.TLS != nil {
+            req.URL.Scheme = "https"
+        } else {
+            req.URL.Scheme = "http"
+        }
     }
-
+    if req.URL.Host == "" {
+        req.URL.Host = req.Host
+    }
     req.RequestURI = ""
 
     resp, err := httpClient.Do(req)
     if err != nil {
-        fmt.Printf("%s is unreachable\n", url)
-        LoadResponse(w, req, matched)
+        fmt.Printf("%s is unreachable: %v\n", req.URL, err)
+        if !writeCachedResponse(w, req, matched) {
+            fmt.Fprintf(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+        }
         return
     }
     defer resp.Body.Close()
 
-    body, _ := io.ReadAll(resp.Body)
-
-    for k, v := range resp.Header {
-        w.Header()[k] = v
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        fmt.Printf("Failed to read response body: %v\n", err)
     }
-    w.WriteHeader(resp.StatusCode)
-    w.Write(body)
 
-    // Save file
+    resp.Body = io.NopCloser(bytes.NewReader(body))
+    if err := resp.Write(w); err != nil {
+        fmt.Printf("Failed to write response: %v\n", err)
+    }
+
     if resp.StatusCode == http.StatusOK {
         if err := SaveResponse(body, resp, req, matched); err != nil {
-            fmt.Printf("Failed to cache %s: %s", url, err)
+            fmt.Printf("Failed to cache %s: %v\n", req.URL, err)
         }
     }
 }
 
+func handleHTTP(w http.ResponseWriter, req *http.Request) {
+    matched := Match(req)
+    fmt.Printf("HTTP %s %s\n", req.Method, req.URL)
+    forwardRequest(w, req, matched)
+}
+
 func handleHTTPS(w http.ResponseWriter, req *http.Request) {
-    // Not implemented
+    hijacker, ok := w.(http.Hijacker)
+    if !ok {
+        http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+        return
+    }
+
+    clientConn, _, err := hijacker.Hijack()
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+    defer clientConn.Close()
+
+    if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+        fmt.Printf("Failed to write connection established: %v\n", err)
+        return
+    }
+
+    cert, err := signer.GenerateCertificate(*req.URL)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+
+    tlsConfig := &tls.Config{Certificates: []tls.Certificate{*cert}}
+    tlsConn := tls.Server(clientConn, tlsConfig)
+    defer tlsConn.Close()
+
+    tlsReader := bufio.NewReader(tlsConn)
+    inReq, err := http.ReadRequest(tlsReader)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+
+    inReq.URL.Scheme = "https"
+    inReq.URL.Host = inReq.Host
+    inReq.RequestURI = ""
+
+    matched := Match(inReq)
+    fmt.Printf("HTTPS %s %s\n", inReq.Method, inReq.URL)
+
+    bufWriter := bufio.NewWriter(tlsConn)
+    forwardRequest(bufWriter, inReq, matched)
+    bufWriter.Flush()
 }
 
 func connHandler(w http.ResponseWriter, req *http.Request) {
@@ -173,21 +237,28 @@ func main() {
 
     err := filter.Load(*patternPath)
     if err != nil {
-        fmt.Println(err)
-        filter.LoadRegex(*pattern)
+        panic(err)
     }
 
     err = cache.Load(*dbPath)
     if err != nil {
-        fmt.Println(err)
+        panic(err)
     }
     defer cache.Close()
+
+    err = signer.LoadOrCreate(*certPath, *keyPath)
+    if err != nil {
+        panic(err)
+    }
 
     httpClient = &http.Client {}
 
     server := &http.Server {
         Addr: *listenAddr,
         Handler: http.HandlerFunc(connHandler),
+        TLSConfig: &tls.Config {
+            InsecureSkipVerify: true,
+        },
     }
 
     fmt.Printf("Server started on %s\n", *listenAddr)
