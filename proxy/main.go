@@ -8,7 +8,6 @@ import (
     "bytes"
     "bufio"
     "io"
-    "strings"
     "encoding/json"
     "github.com/cespare/xxhash/v2"
     f "caching-proxy/filter"
@@ -19,7 +18,8 @@ import (
 var (
     listenAddr   = flag.String("port", ":8080", "proxy listen address")
     dbPath       = flag.String("db", "./cache.db", "SQLite3 cache database filepath")
-    patternPath  = flag.String("patterns", "", "URL regex patterns file")
+    whitePath    = flag.String("white", "./whitelist.txt", "Whitelist regex patterns filepath")
+    blackPath    = flag.String("black", "./blacklist.txt", "Blacklist regex patterns filepath")
     certPath     = flag.String("cert", "./ca.cert", "CA certificate filepath")
     keyPath      = flag.String("key", "./key.key", "RSA private key of CA filepath")
 )
@@ -93,6 +93,7 @@ func SaveResponse(body []byte, resp *http.Response, req *http.Request, matched R
 }
 
 func writeCachedResponse(w io.Writer, req *http.Request, matched RequestType) bool {
+    fmt.Println("Reading", req.URL, "from cache")
     var page c.Page
     var err error
 
@@ -235,7 +236,7 @@ func connHandler(w http.ResponseWriter, req *http.Request) {
 func main() {
     flag.Parse()
 
-    err := filter.Load(*patternPath)
+    err := filter.Load(*whitePath, *blackPath)
     if err != nil {
         panic(err)
     }
@@ -263,7 +264,15 @@ func main() {
 
     fmt.Printf("Server started on %s\n", *listenAddr)
     fmt.Printf("Cache database path: %s\n", *dbPath)
-    fmt.Printf("Pattern specified: %s\n", strings.Join(filter.Valid, "|"))
+    fmt.Println("Whitelisted patterns:")
+    for _, pattern := range filter.WhitePatterns {
+        fmt.Println(pattern)
+    }
+
+    fmt.Println("Blacklisted patterns:")
+    for _, pattern := range filter.BlackPatterns {
+        fmt.Println(pattern)
+    }
 
     if err := server.ListenAndServe(); err != nil {
         fmt.Printf("Listen error: %s\n", err)
