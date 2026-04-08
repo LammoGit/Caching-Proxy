@@ -56,9 +56,6 @@ func (filter *Filter) Load(whitePath, blackPath string) error {
         filter.BlackPatterns = append(filter.BlackPatterns, line)
     }
 
-    fmt.Println(strings.Join(filter.WhitePatterns, "|"))
-    fmt.Println(strings.Join(filter.BlackPatterns, "|"))
-
     if len(filter.WhitePatterns) > 0 {
         filter.WhiteRegex = regexp.MustCompile("^" + strings.Join(filter.WhitePatterns, "$|^") + "$")
     } else {
