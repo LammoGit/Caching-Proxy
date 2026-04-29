@@ -243,7 +243,7 @@ func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Req
             Content:  body,
             Hash:     hash,
         }
-        fmt.Printf("Saved %s to cache\n", url)
+        fmt.Printf("Saved %s to cache\n%s", url, headers)
         return proxy.Cache.AddPage(page)
 
     case AssetMatch:

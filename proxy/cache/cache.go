@@ -27,15 +27,15 @@ func Compress(content []byte) ([]byte, error) {
     var buffer bytes.Buffer
     gz, err := gzip.NewWriterLevel(&buffer, gzipLevel)
     if err != nil {
-        return []byte{}, err
+        return []byte{}, fmt.Errorf("couldn't initialize compression: %s", err)
     }
 
     if _, err = gz.Write(content); err != nil {
-        return []byte{}, err
+        return []byte{}, fmt.Errorf("error during compression: %s", err)
     }
 
     if err = gz.Close(); err != nil {
-        return []byte{}, err
+        return []byte{}, fmt.Errorf("error during fulshing compressed data: %s", err)
     }
 
     return buffer.Bytes(), nil
@@ -45,7 +45,7 @@ func Decompress(compressed []byte) ([]byte, error) {
     buffer := bytes.NewReader(compressed)
     gz, err := gzip.NewReader(buffer)
     if err != nil {
-        return []byte{}, err
+        return []byte{}, fmt.Errorf("couldn't initialize decompression: %s", err)
     }
     defer gz.Close()
 

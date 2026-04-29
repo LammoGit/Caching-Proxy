@@ -18,14 +18,14 @@ type Filter struct {
 func (filter *Filter) Load(whitePath, blackPath string) error {
     wlFile, err := os.Open(whitePath)
     if err != nil {
-        return fmt.Errorf("Couldn't open whitelist file at path: %s\n", whitePath)
+        return fmt.Errorf("couldn't open whitelist file at path: %s", whitePath)
     }
     defer wlFile.Close()
 
 
     blFile, err := os.Open(blackPath)
     if err != nil {
-        return fmt.Errorf("Couldn't open blacklist file at path: %s\n", blackPath)
+        return fmt.Errorf("couldn't open blacklist file at path: %s", blackPath)
     }
     defer blFile.Close()
 
@@ -72,12 +72,12 @@ func (filter *Filter) Load(whitePath, blackPath string) error {
 }
 
 func (filter *Filter) Match(text string) bool {
-
-    return !(filter.BlackRegex != nil && filter.BlackRegex.MatchString(text)) &&
-    (filter.WhiteRegex != nil && filter.WhiteRegex.MatchString(text))
+    return (filter.BlackRegex == nil || !filter.BlackRegex.MatchString(text)) &&
+        filter.WhiteRegex != nil &&
+        filter.WhiteRegex.MatchString(text)
 }
 
-func (filter *Filter) MatchAny(texts []string) int {
+func (filter *Filter) MatchIndex(texts []string) int {
     if filter.WhiteRegex == nil || filter.BlackRegex == nil {
         return -1
     }

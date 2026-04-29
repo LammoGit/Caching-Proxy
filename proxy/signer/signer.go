@@ -28,7 +28,7 @@ type Signer struct {
 func (signer *Signer) LoadOrCreate(certPath, keyPath string) error {
     serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't generate serial number of a root certificate: %s", err)
     }
     signer.Cert = &x509.Certificate {
         Version: 3,
@@ -46,14 +46,16 @@ func (signer *Signer) LoadOrCreate(certPath, keyPath string) error {
 
     if err := signer.LoadPK(keyPath); err == nil {
         return nil
+    } else {
+        fmt.Println(err)
     }
 
     if err := signer.GeneratePK(); err != nil {
-        return err
+        return fmt.Errorf("couldn't generate private key: %s", err)
     }
 
     if err := signer.Save(certPath, keyPath); err != nil {
-        return err
+        return fmt.Errorf("couldn't save private key and certificate: %s", err)
     }
 
     return nil
@@ -62,12 +64,12 @@ func (signer *Signer) LoadOrCreate(certPath, keyPath string) error {
 func (signer *Signer) LoadPK(keyPath string) error {
     pkFile, err := os.Open(keyPath)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't open private key file: %s", err)
     }
 
     pkPemBytes, err := io.ReadAll(pkFile)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't read data from private key file: %s", err)
     }
 
     pkBlock, _ := pem.Decode(pkPemBytes)
@@ -75,7 +77,7 @@ func (signer *Signer) LoadPK(keyPath string) error {
 
     pk, err := x509.ParsePKCS8PrivateKey(pkBytes)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't parse private key to PKCS#8: %s", err)
     }
     signer.Pk = pk.(*rsa.PrivateKey)
 
@@ -92,19 +94,19 @@ func (signer *Signer) Save(certPath, keyPath string) error {
         signer.Pk,
     )
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't create root certificate: %s", err)
     }
 
     // Private key bytes
     pkBytes, err := x509.MarshalPKCS8PrivateKey(signer.Pk)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't marshal PKCS#8 private key: %s", err)
     }
 
     // Save certificate
     certFile, err := os.Create(certPath)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't open/create root certificate file: %s", err)
     }
     defer certFile.Close()
 
@@ -115,13 +117,13 @@ func (signer *Signer) Save(certPath, keyPath string) error {
 
     err = pem.Encode(certFile, &block)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't write root certificate using PEM encoding to a file: %s", err)
     }
 
     // Save private key
     keyFile, err := os.Create(keyPath)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't open/create private key file: %s", err)
     }
     defer keyFile.Close()
 
@@ -132,7 +134,7 @@ func (signer *Signer) Save(certPath, keyPath string) error {
 
     err = pem.Encode(keyFile, &block)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't write private key using PEM encoding to a file: %s", err)
     }
 
     return nil
@@ -141,7 +143,7 @@ func (signer *Signer) Save(certPath, keyPath string) error {
 func (signer *Signer) GeneratePK() error {
     pk, err := rsa.GenerateKey(rand.Reader, KeySize)
     if err != nil {
-        return err
+        return fmt.Errorf("couldn't generate RSA private key: %s", err)
     }
     signer.Pk = pk
     return nil
@@ -153,7 +155,7 @@ func (signer *Signer) GenerateCertificate(url u.URL) (*tls.Certificate, error) {
     if signer.cache == nil {
         cache, err := lru.New[string, *tls.Certificate](MaxCacheSize)
         if err != nil {
-            return nil, err
+            return nil, fmt.Errorf("couldn't initialize LRU cache: %s", err)
         }
         signer.cache = cache
     }
@@ -161,19 +163,19 @@ func (signer *Signer) GenerateCertificate(url u.URL) (*tls.Certificate, error) {
     if signer.cache.Contains(hostname) {
         cert, ok := signer.cache.Get(hostname)
         if ok {
-            fmt.Printf("Certificate cache hit for %s\n", hostname)
+            fmt.Printf("leaf certificate cache hit for %s\n", hostname)
             return cert, nil
         }
     }
 
     pk, err := rsa.GenerateKey(rand.Reader, KeySize)
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("couldn't generate private key of a leaf certificate: %s", err)
     }
 
     serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("couldn't generate serial number of a leaf certificate: %s", err)
     }
     cert := x509.Certificate {
         Version: 3,
@@ -197,7 +199,7 @@ func (signer *Signer) GenerateCertificate(url u.URL) (*tls.Certificate, error) {
     )
 
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("couldn't create leaf certificate: %s", err)
     }
 
     tlsCert := tls.Certificate {
