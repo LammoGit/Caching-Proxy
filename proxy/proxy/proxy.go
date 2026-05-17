@@ -10,7 +10,6 @@ import (
     "bufio"
     "io"
     "encoding/json"
-    "github.com/cespare/xxhash/v2"
     "caching-proxy/filter"
     "caching-proxy/cache"
     "caching-proxy/signer"
@@ -232,35 +231,18 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched Reque
 
 func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Request, matched RequestType) error {
     headers, _ := json.Marshal(resp.Header)
-    hash := xxhash.Sum64(body)
     url := req.URL.String()
 
     switch matched {
-    case PageMatch:
+    case PageMatch, AssetMatch:
         page := cache.Page {
-            Url:      url,
-            Headers:  headers,
-            Content:  body,
-            Hash:     hash,
+            Url:     url,
+            Headers: headers,
+            Content: body,
+            IsAsset: matched == AssetMatch,
         }
         fmt.Printf("Saved %s to cache\n%s", url, headers)
-        return proxy.Cache.AddPage(page)
-
-    case AssetMatch:
-        pageURL := req.Header.Get("Referer")
-        if pageURL == "" {
-            return fmt.Errorf("Asset missing Referer header")
-        }
-
-        asset := cache.Page {
-            Url:      url,
-            Headers:  headers,
-            Content:  body,
-            Hash:     hash,
-        }
-        fmt.Printf("Saved %s to cache\n", url)
-        return proxy.Cache.AddAsset(pageURL, asset)
-
+        return proxy.Cache.Add(page)
     default:
         return nil
     }
@@ -268,14 +250,14 @@ func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Req
 
 func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched RequestType) bool {
     fmt.Println("Reading", req.URL, "from cache")
-    var page cache.Page
+    var page *cache.Page
     var err error
 
     switch matched {
     case PageMatch:
-        page, err = proxy.Cache.GetPage(req.URL.String())
+        page, err = proxy.Cache.Get(req.URL.String())
     case AssetMatch:
-        page, err = proxy.Cache.GetAsset(req.URL.String())
+        page, err = proxy.Cache.Get(req.URL.String())
     default:
         err = fmt.Errorf("%s didn't match", req.URL)
     }
