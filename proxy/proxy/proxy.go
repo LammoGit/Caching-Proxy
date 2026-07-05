@@ -10,7 +10,6 @@ import (
     "bufio"
     "io"
     "encoding/json"
-    "github.com/cespare/xxhash/v2"
     "caching-proxy/filter"
     "caching-proxy/cache"
     "caching-proxy/signer"
@@ -24,18 +23,20 @@ const (
 )
 
 func (proxy *Proxy) Match(req *http.Request) RequestType {
-    if proxy.Filter.Match(req.URL.String()) {
+    urlString := req.URL.String()
+    referer := req.Header.Get("Referer")
+
+    if proxy.Filter.Match(urlString) {
+        fmt.Printf("%s is a page\n\n", urlString)
         return PageMatch
     }
 
-    if !proxy.Filter.Match(req.Header.Get("Referer")) {
-        return DidntMatch
+    if proxy.Filter.Match(req.Header.Get("Referer")) {
+        fmt.Printf("%s is an asset\n\n", urlString)
+        return PageMatch
     }
 
-    if req.Header.Get("Sec-Fetch-Mode") == "navigate" {
-        return AssetMatch
-    }
-
+    fmt.Printf("%s %s didn't match\n\n", urlString, referer)
     return DidntMatch
 }
 
@@ -205,9 +206,11 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched Reque
 
     resp, err := proxy.Client.Do(req)
     if err != nil {
-        fmt.Printf("%s is unreachable: %v\n", req.URL, err)
-        if !proxy.loadResponse(w, req, matched) {
-            fmt.Fprintf(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+        if matched != DidntMatch {
+            fmt.Printf("%s %s is unreachable: %v\n", req.URL, req.Method, err)
+            if !proxy.loadResponse(w, req, matched) {
+                fmt.Fprintf(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+            }
         }
         return
     }
@@ -223,61 +226,46 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched Reque
         fmt.Printf("Failed to write response: %v\n", err)
     }
 
-    if resp.StatusCode == http.StatusOK {
+    // if resp.StatusCode / 100 == 2 && matched != DidntMatch {
+    if matched != DidntMatch {
         if err := proxy.saveResponse(body, resp, req, matched); err != nil {
-            fmt.Printf("Failed to cache %s: %v\n", req.URL, err)
+            fmt.Printf("Failed to cache %s %s: %v\n", req.URL, req.Method, err)
         }
     }
 }
 
 func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Request, matched RequestType) error {
     headers, _ := json.Marshal(resp.Header)
-    hash := xxhash.Sum64(body)
     url := req.URL.String()
+    method := req.Method
 
-    switch matched {
-    case PageMatch:
-        page := cache.Page {
-            Url:      url,
-            Headers:  headers,
-            Content:  body,
-            Hash:     hash,
-        }
-        fmt.Printf("Saved %s to cache\n%s", url, headers)
-        return proxy.Cache.AddPage(page)
-
-    case AssetMatch:
-        pageURL := req.Header.Get("Referer")
-        if pageURL == "" {
-            return fmt.Errorf("Asset missing Referer header")
-        }
-
-        asset := cache.Page {
-            Url:      url,
-            Headers:  headers,
-            Content:  body,
-            Hash:     hash,
-        }
-        fmt.Printf("Saved %s to cache\n", url)
-        return proxy.Cache.AddAsset(pageURL, asset)
-
-    default:
+    if matched == DidntMatch {
         return nil
     }
+
+    page := cache.Page {
+        Url:      url,
+        Method:   method,
+        Headers:  headers,
+        Content:  string(body),
+    }
+    err := proxy.Cache.AddPage(page)
+    if err == nil {
+        fmt.Printf("Saved %s %s to cache\n", url, method)
+    }
+    return err
 }
 
 func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched RequestType) bool {
-    fmt.Println("Reading", req.URL, "from cache")
+    fmt.Println("Reading", req.URL, req.Method, "from cache")
     var page cache.Page
     var err error
 
     switch matched {
-    case PageMatch:
-        page, err = proxy.Cache.GetPage(req.URL.String())
-    case AssetMatch:
-        page, err = proxy.Cache.GetAsset(req.URL.String())
+    case PageMatch, AssetMatch:
+        page, err = proxy.Cache.GetPage(req.URL.String(), req.Method)
     default:
-        err = fmt.Errorf("%s didn't match", req.URL)
+        err = fmt.Errorf("%s %s didn't match", req.URL, req.Method)
     }
 
     if err != nil {
@@ -295,10 +283,10 @@ func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched Request
     }
 
     fmt.Fprintf(w, "\r\n")
-    if _, err := w.Write(page.Content); err != nil {
+    if _, err := w.Write([]byte(page.Content)); err != nil {
         fmt.Printf("Failed to write body: %v\n", err)
         return false
     }
-    fmt.Println("Written", req.URL, "from cache")
+    fmt.Println("Written", req.URL, req.Method, "from cache")
     return true
 }
