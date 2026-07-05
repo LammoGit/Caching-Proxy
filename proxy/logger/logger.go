@@ -40,3 +40,16 @@ func (h *ColorHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 	return err
 }
+
+func Shortener(maxLen int) func(groups []string, a slog.Attr) slog.Attr {
+	return func(groups []string, a slog.Attr) slog.Attr {
+		if a.Key == slog.MessageKey {
+			msgStr := a.Value.String()
+			
+			if len(msgStr) > maxLen {
+				a.Value = slog.StringValue(msgStr[:maxLen-3] + "...")
+			}
+		}
+		return a
+	}
+}
