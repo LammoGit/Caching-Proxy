@@ -15,29 +15,10 @@ import (
     "caching-proxy/signer"
 )
 
-type RequestType int
-const (
-    DidntMatch RequestType = iota
-    PageMatch
-    AssetMatch
-)
-
-func (proxy *Proxy) Match(req *http.Request) RequestType {
-    urlString := req.URL.String()
-    referer := req.Header.Get("Referer")
-
-    if proxy.Filter.Match(urlString) {
-        fmt.Printf("%s is a page\n\n", urlString)
-        return PageMatch
-    }
-
-    if proxy.Filter.Match(req.Header.Get("Referer")) {
-        fmt.Printf("%s is an asset\n\n", urlString)
-        return PageMatch
-    }
-
-    fmt.Printf("%s %s didn't match\n\n", urlString, referer)
-    return DidntMatch
+func (proxy *Proxy) Match(req *http.Request) bool {
+	// URL matches or Referer's URL matches
+    return  proxy.Filter.Match(req.URL.String()) ||
+    		proxy.Filter.Match(req.Header.Get("Referer"))
 }
 
 type ProxySettings struct {
@@ -191,7 +172,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
     bufWriter.Flush()
 }
 
-func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched RequestType) {
+func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool) {
     if req.URL.Scheme == "" {
         if req.TLS != nil {
             req.URL.Scheme = "https"
@@ -206,7 +187,7 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched Reque
 
     resp, err := proxy.Client.Do(req)
     if err != nil {
-        if matched != DidntMatch {
+        if matched {
             fmt.Printf("%s %s is unreachable: %v\n", req.URL, req.Method, err)
             if !proxy.loadResponse(w, req, matched) {
                 fmt.Fprintf(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
@@ -226,20 +207,19 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched Reque
         fmt.Printf("Failed to write response: %v\n", err)
     }
 
-    // if resp.StatusCode / 100 == 2 && matched != DidntMatch {
-    if matched != DidntMatch {
+    if matched {
         if err := proxy.saveResponse(body, resp, req, matched); err != nil {
             fmt.Printf("Failed to cache %s %s: %v\n", req.URL, req.Method, err)
         }
     }
 }
 
-func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Request, matched RequestType) error {
+func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Request, matched bool) error {
     headers, _ := json.Marshal(resp.Header)
     url := req.URL.String()
     method := req.Method
 
-    if matched == DidntMatch {
+    if !matched {
         return nil
     }
 
@@ -256,15 +236,14 @@ func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Req
     return err
 }
 
-func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched RequestType) bool {
+func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched bool) bool {
     fmt.Println("Reading", req.URL, req.Method, "from cache")
     var page cache.Page
     var err error
 
-    switch matched {
-    case PageMatch, AssetMatch:
+    if matched {
         page, err = proxy.Cache.GetPage(req.URL.String(), req.Method)
-    default:
+	} else {
         err = fmt.Errorf("%s %s didn't match", req.URL, req.Method)
     }
 
