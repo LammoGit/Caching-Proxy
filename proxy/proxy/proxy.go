@@ -3,6 +3,7 @@ package proxy
 import (
     "net"
     "time"
+	"log/slog"
     "net/http"
     "crypto/tls"
     "fmt"
@@ -17,8 +18,14 @@ import (
 
 func (proxy *Proxy) Match(req *http.Request) bool {
 	// URL matches or Referer's URL matches
-    return  proxy.Filter.Match(req.URL.String()) ||
+	res :=  proxy.Filter.Match(req.URL.String()) ||
     		proxy.Filter.Match(req.Header.Get("Referer"))
+	if res {
+		slog.Debug(fmt.Sprintf("Matched: %s", req.URL.String()))
+	} else {
+		slog.Debug(fmt.Sprintf("Didn't match: %s", req.URL.String()))
+	}
+	return res
 }
 
 type ProxySettings struct {
@@ -108,7 +115,7 @@ func (proxy *Proxy) Run() error{
 
     fmt.Println("Blacklisted patterns:")
     for _, pat := range proxy.Filter.BlackPatterns {
-        fmt.Println(pat)
+    	fmt.Println(pat)
     }
 
     defer proxy.Cache.Close()
@@ -120,7 +127,7 @@ func (proxy *Proxy) Run() error{
 
 func (proxy *Proxy) handleHTTP(w http.ResponseWriter, req *http.Request) {
     matched := proxy.Match(req)
-    fmt.Printf("HTTP %s %s\n", req.Method, req.URL)
+    slog.Debug(fmt.Sprintf("HTTP %s %s", req.Method, req.URL))
     proxy.forwardRequest(w, req, matched)
 }
 
@@ -133,19 +140,20 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 
     clientConn, _, err := hijacker.Hijack()
     if err != nil {
-        fmt.Println(err)
+		slog.Error("Failed to hijack connection")
         return
     }
     defer clientConn.Close()
 
     if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
-        fmt.Printf("Failed to write connection established: %v\n", err)
+        slog.Error("Failed to write connection established")
         return
     }
 
-    cert, err := proxy.Signer.GenerateCertificate(*req.URL)
+	url := *req.URL
+    cert, err := proxy.Signer.GenerateCertificate(url)
     if err != nil {
-        fmt.Println(err)
+		slog.Error(fmt.Sprintf("Failed to generate certificate for: %s", url))
         return
     }
 
@@ -156,7 +164,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
     tlsReader := bufio.NewReader(tlsConn)
     inReq, err := http.ReadRequest(tlsReader)
     if err != nil {
-        fmt.Println(err)
+    	slog.Error(fmt.Sprintf("Failed to read HTTPS request: %s", url))
         return
     }
 
@@ -165,7 +173,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
     inReq.RequestURI = ""
 
     matched := proxy.Match(inReq)
-    fmt.Printf("HTTPS %s %s\n", inReq.Method, inReq.URL)
+    slog.Debug(fmt.Sprintf("HTTPS %s %s", inReq.Method, inReq.URL))
 
     bufWriter := bufio.NewWriter(tlsConn)
     proxy.forwardRequest(bufWriter, inReq, matched)
@@ -185,11 +193,15 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
     }
     req.RequestURI = ""
 
+	method := req.Method
+	url := req.URL.String()
+
     resp, err := proxy.Client.Do(req)
     if err != nil {
         if matched {
-            fmt.Printf("%s %s is unreachable: %v\n", req.URL, req.Method, err)
+            slog.Debug(fmt.Sprintf("Couldn't reach %s %s", method, url))
             if !proxy.loadResponse(w, req, matched) {
+				slog.Debug(fmt.Sprintf("Couldn't load response from cache for %s %s", method, url))
                 fmt.Fprintf(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
             }
         }
@@ -199,29 +211,27 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
 
     body, err := io.ReadAll(resp.Body)
     if err != nil {
-        fmt.Printf("Failed to read response body: %v\n", err)
+		slog.Error(fmt.Sprintf("Failed to read response body for %s %s", method, url))
     }
 
     resp.Body = io.NopCloser(bytes.NewReader(body))
     if err := resp.Write(w); err != nil {
-        fmt.Printf("Failed to write response: %v\n", err)
+		slog.Error(fmt.Sprintf("Failed to write response to %s %s", method, url))
     }
 
     if matched {
-        if err := proxy.saveResponse(body, resp, req, matched); err != nil {
-            fmt.Printf("Failed to cache %s %s: %v\n", req.URL, req.Method, err)
-        }
+        if err := proxy.saveResponse(body, resp, req); err != nil {
+            slog.Error(fmt.Sprintf("Failed to cache %s %s", method, url))
+        } else {
+            slog.Debug(fmt.Sprintf("Successfully cached %s %s", method, url))
+		}
     }
 }
 
-func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Request, matched bool) error {
+func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Request) error {
     headers, _ := json.Marshal(resp.Header)
     url := req.URL.String()
     method := req.Method
-
-    if !matched {
-        return nil
-    }
 
     page := cache.Page {
         Url:      url,
@@ -229,15 +239,10 @@ func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Req
         Headers:  headers,
         Content:  string(body),
     }
-    err := proxy.Cache.AddPage(page)
-    if err == nil {
-        fmt.Printf("Saved %s %s to cache\n", url, method)
-    }
-    return err
+    return proxy.Cache.AddPage(page)
 }
 
 func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched bool) bool {
-    fmt.Println("Reading", req.URL, req.Method, "from cache")
     var page cache.Page
     var err error
 
@@ -257,15 +262,12 @@ func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched bool) b
 
     fmt.Fprintf(w, "HTTP/1.1 %d %s\r\n", http.StatusOK, http.StatusText(http.StatusOK))
     if err := headers.Write(w); err != nil {
-        fmt.Printf("Failed to write headers: %v\n", err)
         return false
     }
 
-    fmt.Fprintf(w, "\r\n")
+    fmt.Fprintf(w, "\r")
     if _, err := w.Write([]byte(page.Content)); err != nil {
-        fmt.Printf("Failed to write body: %v\n", err)
         return false
     }
-    fmt.Println("Written", req.URL, req.Method, "from cache")
     return true
 }

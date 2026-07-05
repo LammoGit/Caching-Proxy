@@ -11,6 +11,7 @@ import (
     "encoding/pem"
     "time"
     "fmt"
+	"log/slog"
     "os"
     "io"
 	"github.com/hashicorp/golang-lru/v2"
@@ -163,7 +164,7 @@ func (signer *Signer) GenerateCertificate(url u.URL) (*tls.Certificate, error) {
     if signer.cache.Contains(hostname) {
         cert, ok := signer.cache.Get(hostname)
         if ok {
-            fmt.Printf("leaf certificate cache hit for %s\n", hostname)
+			slog.Debug(fmt.Sprintf("Leaf certificate cache hit for %s", hostname))
             return cert, nil
         }
     }

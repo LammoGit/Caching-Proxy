@@ -4,7 +4,8 @@ import (
     "os"
     "regexp"
     "bufio"
-    "fmt"
+	"log/slog"
+	"fmt"
     "strings"
 )
 
@@ -15,18 +16,24 @@ type Filter struct {
     BlackPatterns  []string
 }
 
-func (filter *Filter) Load(whitePath, blackPath string) error {
+func (filter *Filter) Load(whitePath, blackPath string) (err error) {
     wlFile, err := os.Open(whitePath)
     if err != nil {
-        return fmt.Errorf("couldn't open whitelist file at path: %s", whitePath)
-    }
+		slog.Debug(fmt.Sprintf("Couldn't open the whitelist file at path: %s", whitePath))
+        return
+    } else {
+		slog.Debug(fmt.Sprintf("Successfully opened the whitelist file at path: %s", whitePath))
+	}
     defer wlFile.Close()
 
 
     blFile, err := os.Open(blackPath)
     if err != nil {
-        return fmt.Errorf("couldn't open blacklist file at path: %s", blackPath)
-    }
+		slog.Debug(fmt.Sprintf("Couldn't open the blacklist file at path: %s", blackPath))
+        return
+    } else {
+		slog.Debug(fmt.Sprintf("Successfully opened the blacklist file at path: %s", blackPath))
+	}
     defer blFile.Close()
 
     wlScanner := bufio.NewScanner(wlFile)
@@ -40,7 +47,7 @@ func (filter *Filter) Load(whitePath, blackPath string) error {
         line = wlScanner.Text()
         _, err = regexp.Compile(line)
         if err != nil {
-            fmt.Printf("Whitelist pattern is invalid, therefore removed: %s\n", line)
+            slog.Warn(fmt.Sprintf("Whitelist pattern is invalid, therefore removed: %s\n", line))
             continue
         }
         filter.WhitePatterns = append(filter.WhitePatterns, line)
@@ -50,7 +57,7 @@ func (filter *Filter) Load(whitePath, blackPath string) error {
         line = blScanner.Text()
         _, err = regexp.Compile(line)
         if err != nil {
-            fmt.Printf("Blacklist pattern is invalid, therefore removed: %s\n", line)
+            slog.Warn(fmt.Sprintf("Blacklist pattern is invalid, therefore removed: %s\n", line))
             continue
         }
         filter.BlackPatterns = append(filter.BlackPatterns, line)
@@ -72,9 +79,9 @@ func (filter *Filter) Load(whitePath, blackPath string) error {
 }
 
 func (filter *Filter) Match(text string) bool {
-    return (filter.BlackRegex == nil || !filter.BlackRegex.MatchString(text)) &&
-        filter.WhiteRegex != nil &&
-        filter.WhiteRegex.MatchString(text)
+    return  (filter.BlackRegex == nil || !filter.BlackRegex.MatchString(text)) &&
+    		filter.WhiteRegex != nil &&
+    		filter.WhiteRegex.MatchString(text)
 }
 
 func (filter *Filter) MatchIndex(texts []string) int {

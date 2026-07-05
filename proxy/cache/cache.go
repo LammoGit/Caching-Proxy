@@ -2,7 +2,8 @@ package cache
 
 import (
     "database/sql"
-    "fmt"
+	"log/slog"
+	"fmt"
     _ "github.com/mattn/go-sqlite3"
 )
 
@@ -21,6 +22,7 @@ type Cache struct {
 func (cache *Cache) Load(path string) error {
     db, err := sql.Open("sqlite3", path)
     if err != nil {
+		slog.Error(fmt.Sprintf("Failed to open DB connection at path: %s", path))
         return err
     }
 
@@ -41,6 +43,7 @@ func (cache *Cache) Load(path string) error {
     `
     _, err = cache.db.Exec(stmt)
     if err != nil {
+		slog.Error("Failed to execute initial script")
         return err
     }
 
@@ -48,7 +51,7 @@ func (cache *Cache) Load(path string) error {
 }
 
 func (cache *Cache) AddPage(page Page) (err error) {
-    _, err = cache.db.Exec(`
+	_, err = cache.db.Exec(`
         INSERT INTO Pages(url, method, headers, content)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(url, method) DO UPDATE SET
@@ -56,10 +59,11 @@ func (cache *Cache) AddPage(page Page) (err error) {
             content = excluded.content;
     `, page.Url, page.Method, page.Headers, page.Content)
     if err != nil {
-        return fmt.Errorf("Insert/Update page: %s", err)
-    }
-
-    return nil
+		slog.Debug(fmt.Sprintf("Failed to insert/update page: %s %s", page.Method, page.Url))
+    } else {
+		slog.Debug(fmt.Sprintf("Inserted/Updated page: %s %s", page.Method, page.Url))
+	}
+    return
 }
 
 func (cache *Cache) GetPage(url, method string) (page Page, err error) {
@@ -70,6 +74,11 @@ func (cache *Cache) GetPage(url, method string) (page Page, err error) {
         FROM Pages
         WHERE url = ? AND method = ?
     `, url, method).Scan(&page.Headers, &page.Content)
+	if err != nil {
+		slog.Debug(fmt.Sprintf("Failed to get the page: %s %s", method, url))
+	} else {
+		slog.Debug(fmt.Sprintf("Successfully got the page: %s %s", method, url))
+	}
     return
 }
 
@@ -78,9 +87,15 @@ func (cache *Cache) DeletePage(url, method string) (err error) {
         DELETE FROM Pages
         WHERE url = ? AND method = ?
     `, url, method)
+	if err != nil {
+		slog.Debug(fmt.Sprintf("Failed to delete the page: %s %s", method, url))
+	} else {
+		slog.Debug(fmt.Sprintf("Successfully deleted the page: %s %s", method, url))
+	}
     return
 }
 
 func (cache *Cache) Close() error {
+	slog.Debug("Closing DB connection")
     return cache.db.Close()
 }
