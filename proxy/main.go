@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"fmt"
     "flag"
+	l "caching-proxy/logger"
     p "caching-proxy/proxy"
 )
 
@@ -51,7 +52,7 @@ func main() {
 		}
 	}
 
-	handler := slog.NewTextHandler(logDest, &slog.HandlerOptions{
+	handler := l.New(logDest, &slog.HandlerOptions{
 		Level: level,
 	})
 	logger := slog.New(handler)
