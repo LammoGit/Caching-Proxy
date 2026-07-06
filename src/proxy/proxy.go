@@ -265,7 +265,7 @@ func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched bool) b
         return false
     }
 
-    fmt.Fprintf(w, "\r")
+    fmt.Fprintf(w, "\r\n")
     if _, err := w.Write(page.Content); err != nil {
         return false
     }
