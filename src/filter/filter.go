@@ -73,7 +73,6 @@ func New(whitePath, blackPath string) (filter *Filter, err error) {
     }
 
 	if len(filter.BlackPatterns) > 0 {
-		fmt.Printf("%s\n", "^" + strings.Join(filter.BlackPatterns, "$|^") + "$")
     	filter.BlackRegex = regexp.MustCompile("^" + strings.Join(filter.BlackPatterns, "|") + "$")
 	} else {
     	filter.BlackRegex = nil
