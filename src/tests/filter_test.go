@@ -32,7 +32,7 @@ var (
 	}
 )
 
-func getFilePathes(t *testing.T) (whitePath, blackPath string) {
+func getFilterFilePathes(t *testing.T) (whitePath, blackPath string) {
 	t.Helper()
 
 	// 
@@ -57,7 +57,7 @@ func getFilePathes(t *testing.T) (whitePath, blackPath string) {
 
 // Create New Filter
 func TestCreateFilter(t *testing.T) {
-	whitePath, blackPath := getFilePathes(t)
+	whitePath, blackPath := getFilterFilePathes(t)
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 	
@@ -69,7 +69,7 @@ func TestCreateFilter(t *testing.T) {
 
 // Match Whitelisted
 func TestMatchingWhitelisted(t *testing.T) {
-	whitePath, blackPath := getFilePathes(t)
+	whitePath, blackPath := getFilterFilePathes(t)
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
@@ -94,7 +94,7 @@ func TestMatchingWhitelisted(t *testing.T) {
 
 // Match Blacklisted
 func TestMatchingBlacklisted(t *testing.T) {
-	whitePath, blackPath := getFilePathes(t)
+	whitePath, blackPath := getFilterFilePathes(t)
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
@@ -119,7 +119,7 @@ func TestMatchingBlacklisted(t *testing.T) {
 
 // Match Graylisted
 func TestMatchingGraylisted(t *testing.T) {
-	whitePath, blackPath := getFilePathes(t)
+	whitePath, blackPath := getFilterFilePathes(t)
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
@@ -144,7 +144,7 @@ func TestMatchingGraylisted(t *testing.T) {
 
 // Match non-matching string
 func TestNonMatching(t *testing.T) {
-	whitePath, blackPath := getFilePathes(t)
+	whitePath, blackPath := getFilterFilePathes(t)
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
