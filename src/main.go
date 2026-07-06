@@ -21,10 +21,6 @@ var (
 	verbosity    = flag.String("v", "info", "Level of verbosity (error, warning, info debug)")
 )
 
-var (
-    proxy p.Proxy
-)
-
 func main() {
     flag.Parse()
 

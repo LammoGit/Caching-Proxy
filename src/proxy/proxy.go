@@ -40,28 +40,28 @@ type ProxySettings struct {
 type Proxy struct {
     Server    *http.Server
     Client    *http.Client
-    Filter    filter.Filter
-    Cache     cache.Cache
-    Signer    signer.Signer
+    Filter    *filter.Filter
+    Cache     *cache.Cache
+    Signer    *signer.Signer
     Settings  ProxySettings
 }
 
-func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string) (*Proxy, error) {
-    var proxy Proxy
+func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string) (proxy *Proxy, err error) {
+	proxy = &Proxy{}
 
-    err := proxy.Filter.Load(whitePath, blackPath)
+    proxy.Filter, err = filter.New(whitePath, blackPath)
     if err != nil {
-        return &proxy, err
+        return
     }
 
-    err = proxy.Signer.LoadOrCreate(certPath, keyPath)
+    proxy.Signer, err = signer.New(certPath, keyPath)
     if err != nil {
-        return &proxy, err
+        return
     }
 
-    err = proxy.Cache.Load(dbPath)
+    proxy.Cache, err = cache.New(dbPath)
     if err != nil {
-        return &proxy, err
+        return
     }
 
     transport := &http.Transport{
@@ -100,7 +100,7 @@ func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string) (*P
         KeyPath:     keyPath,
     }
 
-    return &proxy, nil
+    return
 }
 
 func (proxy *Proxy) Run() error{
@@ -237,7 +237,7 @@ func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Req
         Url:      url,
         Method:   method,
         Headers:  headers,
-        Content:  string(body),
+        Content:  body,
     }
     return proxy.Cache.AddPage(page)
 }
@@ -266,7 +266,7 @@ func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched bool) b
     }
 
     fmt.Fprintf(w, "\r")
-    if _, err := w.Write([]byte(page.Content)); err != nil {
+    if _, err := w.Write(page.Content); err != nil {
         return false
     }
     return true

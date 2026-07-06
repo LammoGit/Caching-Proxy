@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS Pages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		url TEXT NOT NULL,
+		method TEXT NOT NULL,
+		headers BLOB,
+		content BLOB,
+		UNIQUE(url, method)
+);

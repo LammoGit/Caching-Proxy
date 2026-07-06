@@ -1,17 +1,22 @@
 package cache
 
 import (
+	_ "embed"
     "database/sql"
 	"log/slog"
 	"fmt"
+
     _ "github.com/mattn/go-sqlite3"
 )
+
+//go:embed init.sql
+var initStmt string
 
 type Page struct {
     Url      string
     Method   string
     Headers  []byte
-    Content  string
+    Content  []byte
 }
 
 type Cache struct {
@@ -19,35 +24,25 @@ type Cache struct {
     db    *sql.DB
 }
 
-func (cache *Cache) Load(path string) error {
+func New(path string) (cache *Cache, err error) {
     db, err := sql.Open("sqlite3", path)
     if err != nil {
 		slog.Error(fmt.Sprintf("Failed to open DB connection at path: %s", path))
-        return err
+        return
     }
 
-    cache.db = db
-    cache.path = path
+	cache = &Cache {
+		db: db,
+		path: path,
+	}
 
-    stmt := `
-    PRAGMA foreign_keys = ON;
-    
-    CREATE TABLE IF NOT EXISTS Pages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url TEXT NOT NULL,
-        method TEXT NOT NULL,
-        headers BLOB,
-        content TEXT NOT NULL,
-        UNIQUE(url, method)
-    );
-    `
-    _, err = cache.db.Exec(stmt)
+    _, err = cache.db.Exec(initStmt)
     if err != nil {
 		slog.Error("Failed to execute initial script")
-        return err
+        return
     }
 
-    return nil
+    return
 }
 
 func (cache *Cache) AddPage(page Page) (err error) {

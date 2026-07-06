@@ -26,11 +26,14 @@ type Signer struct {
     cache  *lru.Cache[string, *tls.Certificate]
 }
 
-func (signer *Signer) LoadOrCreate(certPath, keyPath string) error {
+func New(certPath, keyPath string) (signer *Signer, err error) {
     serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
     if err != nil {
-        return fmt.Errorf("couldn't generate serial number of a root certificate: %s", err)
+		slog.Error("Couldn't generate a serial number for a root certificate")
+		return
     }
+
+	signer = &Signer{}
     signer.Cert = &x509.Certificate {
         Version: 3,
         SerialNumber: serialNumber,
@@ -45,32 +48,38 @@ func (signer *Signer) LoadOrCreate(certPath, keyPath string) error {
         MaxPathLen: 1,
     }
 
-    if err := signer.LoadPK(keyPath); err == nil {
-        return nil
+    if err = signer.LoadPK(keyPath); err == nil {
+		slog.Debug("Successfully loaded signer")
+        return
     } else {
-        fmt.Println(err)
+        slog.Debug("Couldn't load private key for the signer")
     }
 
-    if err := signer.GeneratePK(); err != nil {
-        return fmt.Errorf("couldn't generate private key: %s", err)
+    if err = signer.GeneratePK(); err != nil {
+		slog.Error("Couldn't generate a private key for the signer")
+		return
     }
 
-    if err := signer.Save(certPath, keyPath); err != nil {
-        return fmt.Errorf("couldn't save private key and certificate: %s", err)
+    if err = signer.Save(certPath, keyPath); err != nil {
+		slog.Error("Couldn't save the private key and certificate of the signer")
+		return
     }
 
-    return nil
+	slog.Debug("Successfully generated and saved signer")
+    return
 }
 
-func (signer *Signer) LoadPK(keyPath string) error {
+func (signer *Signer) LoadPK(keyPath string) (err error) {
     pkFile, err := os.Open(keyPath)
     if err != nil {
-        return fmt.Errorf("couldn't open private key file: %s", err)
+		slog.Error("Couldn't open private key file")
+        return
     }
 
     pkPemBytes, err := io.ReadAll(pkFile)
     if err != nil {
-        return fmt.Errorf("couldn't read data from private key file: %s", err)
+		slog.Error("Couldn't read data from private key file")
+        return
     }
 
     pkBlock, _ := pem.Decode(pkPemBytes)
@@ -78,11 +87,13 @@ func (signer *Signer) LoadPK(keyPath string) error {
 
     pk, err := x509.ParsePKCS8PrivateKey(pkBytes)
     if err != nil {
-        return fmt.Errorf("couldn't parse private key to PKCS#8: %s", err)
+		slog.Error("Couldn't parse private key from PKCS#8")
+        return
     }
     signer.Pk = pk.(*rsa.PrivateKey)
 
-    return nil
+	slog.Debug("Successfully loaded private key")
+    return
 }
 
 func (signer *Signer) Save(certPath, keyPath string) error {

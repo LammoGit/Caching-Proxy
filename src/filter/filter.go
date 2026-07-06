@@ -16,7 +16,7 @@ type Filter struct {
     BlackPatterns  []string
 }
 
-func (filter *Filter) Load(whitePath, blackPath string) (err error) {
+func New(whitePath, blackPath string) (filter *Filter, err error) {
     wlFile, err := os.Open(whitePath)
     if err != nil {
 		slog.Debug(fmt.Sprintf("Couldn't open the whitelist file at path: %s", whitePath))
@@ -39,8 +39,10 @@ func (filter *Filter) Load(whitePath, blackPath string) (err error) {
     wlScanner := bufio.NewScanner(wlFile)
     blScanner := bufio.NewScanner(blFile)
 
-    filter.WhitePatterns = make([]string, 0)
-    filter.BlackPatterns = make([]string, 0)
+	filter = &Filter {
+		WhitePatterns: make([]string, 0),
+    	BlackPatterns: make([]string, 0),
+	}
 
     var line string
     for wlScanner.Scan() {
@@ -63,19 +65,21 @@ func (filter *Filter) Load(whitePath, blackPath string) (err error) {
         filter.BlackPatterns = append(filter.BlackPatterns, line)
     }
 
+	err = nil
+
     if len(filter.WhitePatterns) > 0 {
         filter.WhiteRegex = regexp.MustCompile("^" + strings.Join(filter.WhitePatterns, "$|^") + "$")
     } else {
         filter.WhiteRegex = nil
     }
 
-    if len(filter.BlackPatterns) > 0 {
-        filter.BlackRegex = regexp.MustCompile("^" + strings.Join(filter.BlackPatterns, "|") + "$")
-   } else {
-        filter.BlackRegex = nil
-   }
+	if len(filter.BlackPatterns) > 0 {
+    	filter.BlackRegex = regexp.MustCompile("^" + strings.Join(filter.BlackPatterns, "|") + "$")
+	} else {
+    	filter.BlackRegex = nil
+	}
 
-    return nil
+    return
 }
 
 func (filter *Filter) Match(text string) bool {
