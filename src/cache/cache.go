@@ -62,6 +62,9 @@ func (cache *Cache) AddPage(page Page) (err error) {
 }
 
 func (cache *Cache) GetPage(url, method string) (page Page, err error) {
+	page.Url = url
+	page.Method = method
+
     err = cache.db.QueryRow(`
         SELECT
             headers,
