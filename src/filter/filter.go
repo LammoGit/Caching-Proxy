@@ -26,7 +26,6 @@ func New(whitePath, blackPath string) (filter *Filter, err error) {
 	}
     defer wlFile.Close()
 
-
     blFile, err := os.Open(blackPath)
     if err != nil {
 		slog.Debug(fmt.Sprintf("Couldn't open the blacklist file at path: %s", blackPath))
@@ -74,6 +73,7 @@ func New(whitePath, blackPath string) (filter *Filter, err error) {
     }
 
 	if len(filter.BlackPatterns) > 0 {
+		fmt.Printf("%s\n", "^" + strings.Join(filter.BlackPatterns, "$|^") + "$")
     	filter.BlackRegex = regexp.MustCompile("^" + strings.Join(filter.BlackPatterns, "|") + "$")
 	} else {
     	filter.BlackRegex = nil
@@ -86,18 +86,4 @@ func (filter *Filter) Match(text string) bool {
     return  (filter.BlackRegex == nil || !filter.BlackRegex.MatchString(text)) &&
     		filter.WhiteRegex != nil &&
     		filter.WhiteRegex.MatchString(text)
-}
-
-func (filter *Filter) MatchIndex(texts []string) int {
-    if filter.WhiteRegex == nil || filter.BlackRegex == nil {
-        return -1
-    }
-
-    for idx, text := range texts {
-        if filter.Match(text) {
-            return idx
-        }
-    }
-
-    return -1
 }
