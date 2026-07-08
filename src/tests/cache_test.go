@@ -22,7 +22,7 @@ func setupCache(t *testing.T) *c.Cache {
 	t.Helper()
 
 	// Opening DB in RAM
-	cache, err := c.New("file::memory:")
+	cache, err := c.New("file:testdb?mode=memory")
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
