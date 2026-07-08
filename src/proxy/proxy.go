@@ -10,6 +10,7 @@ import (
     "bytes"
     "bufio"
     "io"
+    "context"
     "encoding/json"
     "caching-proxy/filter"
     "caching-proxy/cache"
@@ -125,6 +126,13 @@ func (proxy *Proxy) Run() error{
     return nil
 }
 
+func (proxy *Proxy) Close() error {
+    if proxy.Server != nil {
+        return proxy.Server.Shutdown(context.Background())
+    }
+    return nil
+}
+
 func (proxy *Proxy) handleHTTP(w http.ResponseWriter, req *http.Request) {
     matched := proxy.Match(req)
     slog.Debug(fmt.Sprintf("HTTP %s %s", req.Method, req.URL))
@@ -200,7 +208,7 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
     if err != nil {
         if matched {
             slog.Debug(fmt.Sprintf("Couldn't reach %s %s", method, url))
-            if !proxy.loadResponse(w, req, matched) {
+            if !proxy.LoadResponse(w, req, matched) {
 				slog.Debug(fmt.Sprintf("Couldn't load response from cache for %s %s", method, url))
                 fmt.Fprintf(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
             }
@@ -220,7 +228,7 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
     }
 
     if matched {
-        if err := proxy.saveResponse(body, resp, req); err != nil {
+        if err := proxy.SaveResponse(body, resp, req); err != nil {
             slog.Error(fmt.Sprintf("Failed to cache %s %s", method, url))
         } else {
             slog.Debug(fmt.Sprintf("Successfully cached %s %s", method, url))
@@ -228,7 +236,7 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
     }
 }
 
-func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Request) error {
+func (proxy *Proxy) SaveResponse(body []byte, resp *http.Response, req *http.Request) error {
     headers, _ := json.Marshal(resp.Header)
     url := req.URL.String()
     method := req.Method
@@ -242,7 +250,7 @@ func (proxy *Proxy) saveResponse(body []byte, resp *http.Response, req *http.Req
     return proxy.Cache.AddPage(page)
 }
 
-func (proxy *Proxy) loadResponse(w io.Writer, req *http.Request, matched bool) bool {
+func (proxy *Proxy) LoadResponse(w io.Writer, req *http.Request, matched bool) bool {
     var page cache.Page
     var err error
 
