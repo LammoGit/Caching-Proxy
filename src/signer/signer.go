@@ -26,6 +26,10 @@ type Signer struct {
     cache  *lru.Cache[string, *tls.Certificate]
 }
 
+func (signer *Signer) String() string {
+	return fmt.Sprintf("{%s,\t%s}", signer.Cert, signer.Pk)
+}
+
 func New(certPath, keyPath string) (signer *Signer, err error) {
     serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
     if err != nil {
@@ -72,7 +76,7 @@ func New(certPath, keyPath string) (signer *Signer, err error) {
 func (signer *Signer) LoadPK(keyPath string) (err error) {
     pkFile, err := os.Open(keyPath)
     if err != nil {
-		slog.Error("Couldn't open private key file")
+		slog.Debug("Couldn't open private key file")
         return
     }
 
