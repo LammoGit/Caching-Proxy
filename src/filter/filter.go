@@ -67,13 +67,13 @@ func New(whitePath, blackPath string) (filter *Filter, err error) {
 	err = nil
 
     if len(filter.WhitePatterns) > 0 {
-        filter.WhiteRegex = regexp.MustCompile("^" + strings.Join(filter.WhitePatterns, "$|^") + "$")
+        filter.WhiteRegex = regexp.MustCompile(strings.Join(filter.WhitePatterns, "|"))
     } else {
         filter.WhiteRegex = nil
     }
 
 	if len(filter.BlackPatterns) > 0 {
-    	filter.BlackRegex = regexp.MustCompile("^" + strings.Join(filter.BlackPatterns, "|") + "$")
+    	filter.BlackRegex = regexp.MustCompile(strings.Join(filter.BlackPatterns, "|"))
 	} else {
     	filter.BlackRegex = nil
 	}
