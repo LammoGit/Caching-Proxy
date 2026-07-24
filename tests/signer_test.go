@@ -1,17 +1,17 @@
 package test
 
 import (
+	"fmt"
 	"os"
 	"testing"
-	"fmt"
 
-	s "caching-proxy/signer"
+	s "github.com/LammoGit/Caching-Proxy/internal/signer"
 )
 
 func getSignerFilePathes(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
 
-	// 
+	//
 	certFile, err := os.CreateTemp("", "test-certificate-*.cert")
 	if err != nil {
 		t.Fatalf("Couldn't create a temporary certificate file")
@@ -20,7 +20,7 @@ func getSignerFilePathes(t *testing.T) (certPath, keyPath string) {
 	certFile.Close()
 	os.Remove(certPath)
 
-	// 
+	//
 	keyFile, err := os.CreateTemp("", "test-keylist-*.txt")
 	if err != nil {
 		t.Fatalf("Couldn't create a temporary key file")

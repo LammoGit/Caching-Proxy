@@ -1,4 +1,4 @@
-module caching-proxy
+module github.com/LammoGit/Caching-Proxy
 
 go 1.26.1
 

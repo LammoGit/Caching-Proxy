@@ -16,7 +16,7 @@ import (
     "net/http/httptest"
     "net/http/httputil"
     "testing"
-    p "caching-proxy/proxy"
+    p "github.com/LammoGit/Caching-Proxy/internal/proxy"
 )
 
 var (

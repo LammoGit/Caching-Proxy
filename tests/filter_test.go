@@ -1,31 +1,31 @@
 package test
 
 import (
-	"os"
-	"testing"
-	"strings"
 	"fmt"
+	"os"
+	"strings"
+	"testing"
 
-	f "caching-proxy/filter"
+	f "github.com/LammoGit/Caching-Proxy/internal/filter"
 )
 
 var (
 	whitePattern = "a.*\n[b-d].*"
 	blackPattern = "d.*\n[e-g].*"
-	whiteList = []string {
+	whiteList    = []string{
 		"a",
 		"b",
 		"c",
 	}
-	blackList = []string {
+	blackList = []string{
 		"e",
 		"f",
 		"g",
 	}
-	grayList = []string {
+	grayList = []string{
 		"d",
 	}
-	nonmatchList = []string {
+	nonmatchList = []string{
 		"z",
 		"x",
 		"u",
@@ -35,7 +35,7 @@ var (
 func getFilterFilePathes(t *testing.T) (whitePath, blackPath string) {
 	t.Helper()
 
-	// 
+	//
 	whiteFile, err := os.CreateTemp("", "test-whitelist-*.txt")
 	if err != nil {
 		t.Fatalf("Couldn't create a temporary whitelist file")
@@ -44,7 +44,7 @@ func getFilterFilePathes(t *testing.T) (whitePath, blackPath string) {
 	whiteFile.WriteString(whitePattern)
 	whiteFile.Close()
 
-	// 
+	//
 	blackFile, err := os.CreateTemp("", "test-blacklist-*.txt")
 	if err != nil {
 		t.Fatalf("Couldn't create a temporary blacklist file")
@@ -60,7 +60,7 @@ func TestCreateFilter(t *testing.T) {
 	whitePath, blackPath := getFilterFilePathes(t)
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
-	
+
 	_, err := f.New(whitePath, blackPath)
 	if err != nil {
 		t.Fatalf("Failed to create a filter: %s", err)
