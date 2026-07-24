@@ -162,7 +162,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 	url := *req.URL
 	cert, err := proxy.Signer.GenerateCertificate(url)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to generate certificate for: %s", url))
+		slog.Error(fmt.Sprintf("Failed to generate certificate for: %s", url.String()))
 		return
 	}
 
@@ -173,7 +173,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 	tlsReader := bufio.NewReader(tlsConn)
 	inReq, err := http.ReadRequest(tlsReader)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to read HTTPS request: %s", url))
+		slog.Error(fmt.Sprintf("Failed to read HTTPS request: %s", url.String()))
 		return
 	}
 

@@ -1,12 +1,10 @@
-package test
+package filter
 
 import (
 	"fmt"
 	"os"
 	"strings"
 	"testing"
-
-	f "github.com/LammoGit/Caching-Proxy/internal/filter"
 )
 
 var (
@@ -61,7 +59,7 @@ func TestCreateFilter(t *testing.T) {
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
-	_, err := f.New(whitePath, blackPath)
+	_, err := New(whitePath, blackPath)
 	if err != nil {
 		t.Fatalf("Failed to create a filter: %s", err)
 	}
@@ -73,7 +71,7 @@ func TestMatchingWhitelisted(t *testing.T) {
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
-	filter, err := f.New(whitePath, blackPath)
+	filter, err := New(whitePath, blackPath)
 	if err != nil {
 		t.Fatalf("Failed to create a filter: %s", err)
 	}
@@ -98,7 +96,7 @@ func TestMatchingBlacklisted(t *testing.T) {
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
-	filter, err := f.New(whitePath, blackPath)
+	filter, err := New(whitePath, blackPath)
 	if err != nil {
 		t.Fatalf("Failed to create a filter: %s", err)
 	}
@@ -123,7 +121,7 @@ func TestMatchingGraylisted(t *testing.T) {
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
-	filter, err := f.New(whitePath, blackPath)
+	filter, err := New(whitePath, blackPath)
 	if err != nil {
 		t.Fatalf("Failed to create a filter: %s", err)
 	}
@@ -148,7 +146,7 @@ func TestNonMatching(t *testing.T) {
 	defer os.Remove(whitePath)
 	defer os.Remove(blackPath)
 
-	filter, err := f.New(whitePath, blackPath)
+	filter, err := New(whitePath, blackPath)
 	if err != nil {
 		t.Fatalf("Failed to create a filter: %s", err)
 	}

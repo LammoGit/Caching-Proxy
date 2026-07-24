@@ -5,4 +5,6 @@
 *.cer
 *.crt
 *.key
+*.out
+*.prof
 bin

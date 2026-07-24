@@ -1,4 +1,4 @@
-package test
+package cache
 
 import (
 	"database/sql"
@@ -7,22 +7,20 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
-
-	c "github.com/LammoGit/Caching-Proxy/internal/cache"
 )
 
-func equalPages(p1, p2 c.Page) bool {
+func equalPages(p1, p2 Page) bool {
 	return p1.Url == p2.Url &&
 		p1.Method == p2.Method &&
 		slices.Equal(p1.Headers, p2.Headers) &&
 		slices.Equal(p1.Content, p2.Content)
 }
 
-func setupCache(t *testing.T) *c.Cache {
+func setupCache(t *testing.T) *Cache {
 	t.Helper()
 
 	// Opening DB in RAM
-	cache, err := c.New("file:testdb?mode=memory")
+	cache, err := New("file:testdb?mode=memory")
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
@@ -40,7 +38,7 @@ func TestCacheCreation(t *testing.T) {
 	tmpFile.Close()
 	os.Remove(filepath)
 
-	cache, err := c.New(filepath)
+	cache, err := New(filepath)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
@@ -50,7 +48,7 @@ func TestCacheCreation(t *testing.T) {
 func TestPageAddition(t *testing.T) {
 	cache := setupCache(t)
 
-	page := c.Page{
+	page := Page{
 		Url:     "example.com",
 		Method:  "GET",
 		Headers: []byte("1"),
@@ -76,7 +74,7 @@ func TestPageUpdate(t *testing.T) {
 	cache := setupCache(t)
 
 	// The first page version
-	page1 := c.Page{
+	page1 := Page{
 		Url:     "example.com",
 		Method:  "GET",
 		Headers: []byte("1"),
@@ -84,7 +82,7 @@ func TestPageUpdate(t *testing.T) {
 	}
 
 	// The second page version
-	page2 := c.Page{
+	page2 := Page{
 		Url:     page1.Url,
 		Method:  page1.Method,
 		Headers: []byte("2"),
@@ -124,7 +122,7 @@ func TestPageUniqueness(t *testing.T) {
 	cache := setupCache(t)
 
 	// The first page version
-	page1 := c.Page{
+	page1 := Page{
 		Url:     "example.com",
 		Method:  "GET",
 		Headers: []byte("1"),
@@ -132,7 +130,7 @@ func TestPageUniqueness(t *testing.T) {
 	}
 
 	// The second page version
-	page2 := c.Page{
+	page2 := Page{
 		Url:     page1.Url,
 		Method:  "POST",
 		Headers: []byte("2"),
@@ -193,7 +191,7 @@ func TestGetUncachedPage(t *testing.T) {
 func TestDeletePage(t *testing.T) {
 	cache := setupCache(t)
 
-	page := c.Page{
+	page := Page{
 		Url:     "example.com",
 		Method:  "GET",
 		Headers: []byte("1"),

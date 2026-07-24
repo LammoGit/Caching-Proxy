@@ -1,229 +1,230 @@
 package signer
 
 import (
-    "math/big"
-    u "net/url"
-    "crypto/rand"
-    "crypto/rsa"
-    "crypto/tls"
-    "crypto/x509"
-    "crypto/x509/pkix"
-    "encoding/pem"
-    "time"
-    "fmt"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"io"
 	"log/slog"
-    "os"
-    "io"
-	"github.com/hashicorp/golang-lru/v2"
+	"math/big"
+	u "net/url"
+	"os"
+	"time"
+
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-const KeySize int   = 2048
+const KeySize int = 2048
 const MaxCacheSize int = 128
 
 type Signer struct {
-    Cert   *x509.Certificate
-    Pk     *rsa.PrivateKey
-    cache  *lru.Cache[string, *tls.Certificate]
+	Cert  *x509.Certificate
+	Pk    *rsa.PrivateKey
+	cache *lru.Cache[string, *tls.Certificate]
 }
 
 func (signer *Signer) String() string {
-	return fmt.Sprintf("{%s,\t%s}", signer.Cert, signer.Pk)
+	return fmt.Sprintf("{%v,\t%v}", signer.Cert, signer.Pk)
 }
 
 func New(certPath, keyPath string) (signer *Signer, err error) {
-    serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-    if err != nil {
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
 		slog.Error("Couldn't generate a serial number for a root certificate")
 		return
-    }
+	}
 
 	signer = &Signer{}
-    signer.Cert = &x509.Certificate {
-        Version: 3,
-        SerialNumber: serialNumber,
-        Subject: pkix.Name {
-            CommonName: "Caching Proxy Root CA",
-        },
-        NotBefore: time.Now().Add(-24 * time.Hour),
-        NotAfter: time.Now().AddDate(10, 0, 0),
-        KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
-        BasicConstraintsValid: true,
-        IsCA: true,
-        MaxPathLen: 1,
-    }
+	signer.Cert = &x509.Certificate{
+		Version:      3,
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName: "Caching Proxy Root CA",
+		},
+		NotBefore:             time.Now().Add(-24 * time.Hour),
+		NotAfter:              time.Now().AddDate(10, 0, 0),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            1,
+	}
 
-    if err = signer.LoadPK(keyPath); err == nil {
+	if err = signer.LoadPK(keyPath); err == nil {
 		slog.Debug("Successfully loaded signer")
-        return
-    } else {
-        slog.Debug("Couldn't load private key for the signer")
-    }
+		return
+	} else {
+		slog.Debug("Couldn't load private key for the signer")
+	}
 
-    if err = signer.GeneratePK(); err != nil {
+	if err = signer.GeneratePK(); err != nil {
 		slog.Error("Couldn't generate a private key for the signer")
 		return
-    }
+	}
 
-    if err = signer.Save(certPath, keyPath); err != nil {
+	if err = signer.Save(certPath, keyPath); err != nil {
 		slog.Error("Couldn't save the private key and certificate of the signer")
 		return
-    }
+	}
 
 	slog.Debug("Successfully generated and saved signer")
-    return
+	return
 }
 
 func (signer *Signer) LoadPK(keyPath string) (err error) {
-    pkFile, err := os.Open(keyPath)
-    if err != nil {
+	pkFile, err := os.Open(keyPath)
+	if err != nil {
 		slog.Debug("Couldn't open private key file")
-        return
-    }
+		return
+	}
 
-    pkPemBytes, err := io.ReadAll(pkFile)
-    if err != nil {
+	pkPemBytes, err := io.ReadAll(pkFile)
+	if err != nil {
 		slog.Error("Couldn't read data from private key file")
-        return
-    }
+		return
+	}
 
-    pkBlock, _ := pem.Decode(pkPemBytes)
-    pkBytes := pkBlock.Bytes
+	pkBlock, _ := pem.Decode(pkPemBytes)
+	pkBytes := pkBlock.Bytes
 
-    pk, err := x509.ParsePKCS8PrivateKey(pkBytes)
-    if err != nil {
+	pk, err := x509.ParsePKCS8PrivateKey(pkBytes)
+	if err != nil {
 		slog.Error("Couldn't parse private key from PKCS#8")
-        return
-    }
-    signer.Pk = pk.(*rsa.PrivateKey)
+		return
+	}
+	signer.Pk = pk.(*rsa.PrivateKey)
 
 	slog.Debug("Successfully loaded private key")
-    return
+	return
 }
 
 func (signer *Signer) Save(certPath, keyPath string) error {
-    // Certificate bytes
-    certBytes, err := x509.CreateCertificate(
-        rand.Reader,
-        signer.Cert,
-        signer.Cert,
-        &signer.Pk.PublicKey,
-        signer.Pk,
-    )
-    if err != nil {
-        return fmt.Errorf("couldn't create root certificate: %s", err)
-    }
+	// Certificate bytes
+	certBytes, err := x509.CreateCertificate(
+		rand.Reader,
+		signer.Cert,
+		signer.Cert,
+		&signer.Pk.PublicKey,
+		signer.Pk,
+	)
+	if err != nil {
+		return fmt.Errorf("couldn't create root certificate: %s", err)
+	}
 
-    // Private key bytes
-    pkBytes, err := x509.MarshalPKCS8PrivateKey(signer.Pk)
-    if err != nil {
-        return fmt.Errorf("couldn't marshal PKCS#8 private key: %s", err)
-    }
+	// Private key bytes
+	pkBytes, err := x509.MarshalPKCS8PrivateKey(signer.Pk)
+	if err != nil {
+		return fmt.Errorf("couldn't marshal PKCS#8 private key: %s", err)
+	}
 
-    // Save certificate
-    certFile, err := os.Create(certPath)
-    if err != nil {
-        return fmt.Errorf("couldn't open/create root certificate file: %s", err)
-    }
-    defer certFile.Close()
+	// Save certificate
+	certFile, err := os.Create(certPath)
+	if err != nil {
+		return fmt.Errorf("couldn't open/create root certificate file: %s", err)
+	}
+	defer certFile.Close()
 
-    block := pem.Block {
-        Type: "CERTIFICATE",
-        Bytes: certBytes,
-    }
+	block := pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certBytes,
+	}
 
-    err = pem.Encode(certFile, &block)
-    if err != nil {
-        return fmt.Errorf("couldn't write root certificate using PEM encoding to a file: %s", err)
-    }
+	err = pem.Encode(certFile, &block)
+	if err != nil {
+		return fmt.Errorf("couldn't write root certificate using PEM encoding to a file: %s", err)
+	}
 
-    // Save private key
-    keyFile, err := os.Create(keyPath)
-    if err != nil {
-        return fmt.Errorf("couldn't open/create private key file: %s", err)
-    }
-    defer keyFile.Close()
+	// Save private key
+	keyFile, err := os.Create(keyPath)
+	if err != nil {
+		return fmt.Errorf("couldn't open/create private key file: %s", err)
+	}
+	defer keyFile.Close()
 
-    block = pem.Block {
-        Type: "RSA PRIVATE KEY",
-        Bytes: pkBytes,
-    }
+	block = pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: pkBytes,
+	}
 
-    err = pem.Encode(keyFile, &block)
-    if err != nil {
-        return fmt.Errorf("couldn't write private key using PEM encoding to a file: %s", err)
-    }
+	err = pem.Encode(keyFile, &block)
+	if err != nil {
+		return fmt.Errorf("couldn't write private key using PEM encoding to a file: %s", err)
+	}
 
-    return nil
+	return nil
 }
 
 func (signer *Signer) GeneratePK() error {
-    pk, err := rsa.GenerateKey(rand.Reader, KeySize)
-    if err != nil {
-        return fmt.Errorf("couldn't generate RSA private key: %s", err)
-    }
-    signer.Pk = pk
-    return nil
+	pk, err := rsa.GenerateKey(rand.Reader, KeySize)
+	if err != nil {
+		return fmt.Errorf("couldn't generate RSA private key: %s", err)
+	}
+	signer.Pk = pk
+	return nil
 }
 
 func (signer *Signer) GenerateCertificate(url u.URL) (*tls.Certificate, error) {
-    hostname := url.Hostname()
+	hostname := url.Hostname()
 
-    if signer.cache == nil {
-        cache, err := lru.New[string, *tls.Certificate](MaxCacheSize)
-        if err != nil {
-            return nil, fmt.Errorf("couldn't initialize LRU cache: %s", err)
-        }
-        signer.cache = cache
-    }
+	if signer.cache == nil {
+		cache, err := lru.New[string, *tls.Certificate](MaxCacheSize)
+		if err != nil {
+			return nil, fmt.Errorf("couldn't initialize LRU cache: %s", err)
+		}
+		signer.cache = cache
+	}
 
-    if signer.cache.Contains(hostname) {
-        cert, ok := signer.cache.Get(hostname)
-        if ok {
+	if signer.cache.Contains(hostname) {
+		cert, ok := signer.cache.Get(hostname)
+		if ok {
 			slog.Debug(fmt.Sprintf("Leaf certificate cache hit for %s", hostname))
-            return cert, nil
-        }
-    }
+			return cert, nil
+		}
+	}
 
-    pk, err := rsa.GenerateKey(rand.Reader, KeySize)
-    if err != nil {
-        return nil, fmt.Errorf("couldn't generate private key of a leaf certificate: %s", err)
-    }
+	pk, err := rsa.GenerateKey(rand.Reader, KeySize)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't generate private key of a leaf certificate: %s", err)
+	}
 
-    serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-    if err != nil {
-        return nil, fmt.Errorf("couldn't generate serial number of a leaf certificate: %s", err)
-    }
-    cert := x509.Certificate {
-        Version: 3,
-        SerialNumber: serialNumber,
-        Subject: pkix.Name {
-            CommonName: url.Hostname(),
-        },
-        NotBefore: time.Now().Add(-time.Hour),
-        NotAfter: time.Now().AddDate(1, 0, 0),
-        KeyUsage: x509.KeyUsageDigitalSignature,
-        ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-        DNSNames: []string{url.Hostname()},
-    }
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("couldn't generate serial number of a leaf certificate: %s", err)
+	}
+	cert := x509.Certificate{
+		Version:      3,
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName: url.Hostname(),
+		},
+		NotBefore:   time.Now().Add(-time.Hour),
+		NotAfter:    time.Now().AddDate(1, 0, 0),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:    []string{url.Hostname()},
+	}
 
-    certBytes, err := x509.CreateCertificate(
-        rand.Reader,
-        &cert,
-        signer.Cert,
-        &pk.PublicKey,
-        signer.Pk,
-    )
+	certBytes, err := x509.CreateCertificate(
+		rand.Reader,
+		&cert,
+		signer.Cert,
+		&pk.PublicKey,
+		signer.Pk,
+	)
 
-    if err != nil {
-        return nil, fmt.Errorf("couldn't create leaf certificate: %s", err)
-    }
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create leaf certificate: %s", err)
+	}
 
-    tlsCert := tls.Certificate {
-        Certificate: [][]byte{certBytes},
-        PrivateKey: pk,
-    }
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{certBytes},
+		PrivateKey:  pk,
+	}
 
-    signer.cache.Add(hostname, &tlsCert)
+	signer.cache.Add(hostname, &tlsCert)
 
-    return &tlsCert, nil
+	return &tlsCert, nil
 }

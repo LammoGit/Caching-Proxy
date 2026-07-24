@@ -1,11 +1,8 @@
-package test
+package signer
 
 import (
-	"fmt"
 	"os"
 	"testing"
-
-	s "github.com/LammoGit/Caching-Proxy/internal/signer"
 )
 
 func getSignerFilePathes(t *testing.T) (certPath, keyPath string) {
@@ -34,7 +31,7 @@ func getSignerFilePathes(t *testing.T) (certPath, keyPath string) {
 // Create Signer
 func TestCreateSigner(t *testing.T) {
 	certPath, keyPath := getSignerFilePathes(t)
-	_, err := s.New(certPath, keyPath)
+	_, err := New(certPath, keyPath)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -45,7 +42,7 @@ func TestCreateSigner(t *testing.T) {
 // Load Signer
 func TestLoadSigner(t *testing.T) {
 	certPath, keyPath := getSignerFilePathes(t)
-	signer, err := s.New(certPath, keyPath)
+	signer, err := New(certPath, keyPath)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -59,13 +56,13 @@ func TestLoadSigner(t *testing.T) {
 	}
 
 	// Load signer
-	signerLoaded, err := s.New(certPath, keyPath)
+	signerLoaded, err := New(certPath, keyPath)
 	if err != nil {
 		t.Fatalf("Failed to load a signer: %s", err)
 	}
 
 	// Different certificate is fine
 	if !signerLoaded.Pk.Equal(signer.Pk) {
-		t.Fatalf("%s", fmt.Sprintf("Saved and loaded signers have different private keys"))
+		t.Fatalf("Saved and loaded signers have different private keys")
 	}
 }
