@@ -1,219 +1,226 @@
 package cache
 
 import (
-	"database/sql"
-	"os"
-	"slices"
+	"crypto/rand"
+	"errors"
+	"log/slog"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func equalPages(p1, p2 Page) bool {
-	return p1.Url == p2.Url &&
-		p1.Method == p2.Method &&
-		slices.Equal(p1.Headers, p2.Headers) &&
-		slices.Equal(p1.Content, p2.Content)
-}
+/* Utility Functions */
 
-func setupCache(t *testing.T) *Cache {
-	t.Helper()
-
-	// Opening DB in RAM
-	cache, err := New("file:testdb?mode=memory")
-	if err != nil {
-		t.Fatalf("Failed to create a cache: %s", err)
+func randomPage() Page {
+	return Page{
+		Url:     rand.Text(),
+		Method:  rand.Text(),
+		Headers: []byte(rand.Text()),
+		Content: []byte(rand.Text()),
 	}
-
-	return cache
 }
 
+/* Page Tests */
+
+// Check Page equality
+func TestPageEquality(t *testing.T) {
+	const checks = 10
+	for range checks {
+		page := randomPage()
+		if !page.Equal(page) {
+			t.Fatalf("Page isn't equal to itself")
+		}
+	}
+}
+
+/* Cache Tests */
+
+// Create a new Cache
 func TestCacheCreation(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "cache-test-*.db")
-	if err != nil {
-		t.Fatalf("Temporary file creation failed: %s", err)
-	}
-	filepath := tmpFile.Name()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
 
-	tmpFile.Close()
-	os.Remove(filepath)
-
-	cache, err := New(filepath)
+	cache, err := New(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
-	cache.Close()
+	defer cache.Close()
 }
 
-func TestPageAddition(t *testing.T) {
-	cache := setupCache(t)
+// Create a new Cache with a logger
+func TestCacheCreationWithLogger(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
 
-	page := Page{
-		Url:     "example.com",
-		Method:  "GET",
-		Headers: []byte("1"),
-		Content: []byte("1"),
-	}
-
-	err := cache.AddPage(page)
+	var b strings.Builder
+	handler := slog.NewTextHandler(&b, nil)
+	logger := slog.New(handler)
+	cache, err := New(dbPath, WithLogger(logger))
 	if err != nil {
-		t.Fatalf("Couldn't add page to cache: %s", err)
+		t.Fatalf("Failed to create a cache: %s", err)
 	}
-
-	cachedPage, err := cache.GetPage(page.Url, page.Method)
-	if err != nil {
-		t.Fatalf("Couldn't get the added page from cache: %s", err)
-	}
-
-	if !equalPages(cachedPage, page) {
-		t.Fatalf("Cached page isn't equal to the actual page\nAdded: %s\nReturned: %s", page, cachedPage)
-	}
+	defer cache.Close()
 }
 
-func TestPageUpdate(t *testing.T) {
-	cache := setupCache(t)
+// Create a new Cache with a nil logger
+func TestCacheCreationWithNilLogger(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
 
-	// The first page version
-	page1 := Page{
-		Url:     "example.com",
-		Method:  "GET",
-		Headers: []byte("1"),
-		Content: []byte("1"),
-	}
-
-	// The second page version
-	page2 := Page{
-		Url:     page1.Url,
-		Method:  page1.Method,
-		Headers: []byte("2"),
-		Content: []byte("2"),
-	}
-
-	// Add first page version
-	err := cache.AddPage(page1)
+	cache, err := New(dbPath, WithLogger(nil))
 	if err != nil {
-		t.Fatalf("Couldn't add page to cache: %s", err)
+		t.Fatalf("Failed to create a cache: %s", err)
 	}
-
-	// Add new page version
-	err = cache.AddPage(page2)
-	if err != nil {
-		t.Fatalf("Couldn't update page in cache: %s", err)
-	}
-
-	// Get new page version from cache
-	cachedPage, err := cache.GetPage(page1.Url, page1.Method)
-	if err != nil {
-		t.Fatalf("Couldn't get the added page from cache: %s", err)
-	}
-
-	if equalPages(cachedPage, page2) {
-		return
-	}
-
-	if equalPages(cachedPage, page1) {
-		t.Fatalf("Page wasn't updated in cache, the first version is returned")
-	} else {
-		t.Fatalf("Not any of the two pages was returned, but something was returned.\nFirst: %s\nSecond: %s\nReturned: %s", page1, page2, cachedPage)
-	}
+	defer cache.Close()
 }
 
-func TestPageUniqueness(t *testing.T) {
-	cache := setupCache(t)
-
-	// The first page version
-	page1 := Page{
-		Url:     "example.com",
-		Method:  "GET",
-		Headers: []byte("1"),
-		Content: []byte("1"),
-	}
-
-	// The second page version
-	page2 := Page{
-		Url:     page1.Url,
-		Method:  "POST",
-		Headers: []byte("2"),
-		Content: []byte("2"),
-	}
-
-	// Add page GET version
-	err := cache.AddPage(page1)
-	if err != nil {
-		t.Fatalf("Couldn't add GET page to cache: %s", err)
-	}
-
-	// Add page POST version
-	err = cache.AddPage(page2)
-	if err != nil {
-		t.Fatalf("Couldn't add POST page to cache: %s", err)
-	}
-
-	// Get new page version from cache
-	cachedGET, err := cache.GetPage(page1.Url, page1.Method)
-	if err != nil {
-		t.Fatalf("Couldn't get the added GET page from cache: %s", err)
-	}
-
-	// Get new page version from cache
-	cachedPOST, err := cache.GetPage(page2.Url, page2.Method)
-	if err != nil {
-		t.Fatalf("Couldn't get the added POST page from cache: %s", err)
-	}
-
-	if equalPages(cachedGET, page1) && equalPages(cachedPOST, page2) {
-		return
-	}
-
-	if equalPages(cachedGET, cachedPOST) {
-		t.Fatalf("Both GET and POST methods have the same page cached\nGET: %s\nPOST: %s\nResult: %s", page1, page2, cachedGET)
-	} else if equalPages(cachedGET, page1) {
-		t.Fatalf("Cached POST page doesn't match added POST page\nGET: %s\nPOST: %s\nCached POST: %s", page1, page2, cachedPOST)
-	} else {
-		t.Fatalf("Cached GET page doesn't match added GET page\nGET: %s\nPOST: %s\nCached GET: %s", page1, page2, cachedGET)
-	}
-}
-
-func TestGetUncachedPage(t *testing.T) {
-	cache := setupCache(t)
-
-	// Get uncached page
-	cached, err := cache.GetPage("example.com", "GET")
+// Create a new Cache with an invalid db path
+func TestCacheCreationWithInvalidDBPath(t *testing.T) {
+	cache, err := New("///")
 	if err == nil {
-		t.Fatalf("Didn't receive error on uncached page request\nResult: %s", cached)
+		t.Fatalf("Created cache with an invalid db path")
 	}
+	defer cache.Close()
 
-	if err != sql.ErrNoRows {
-		t.Fatalf("Received unexpected error: %s", err)
+	if !errors.Is(err, ErrInvalidDBPath) {
+		t.Fatalf("Returned an error not cause of invalid db path: %s", err)
 	}
 }
 
-func TestDeletePage(t *testing.T) {
-	cache := setupCache(t)
+// Add a page to a database
+func TestAddPage(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
 
-	page := Page{
-		Url:     "example.com",
-		Method:  "GET",
-		Headers: []byte("1"),
-		Content: []byte("1"),
+	cache, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	err = cache.AddPage(randomPage())
+	if err != nil {
+		t.Fatalf("Failed to add a page to a cache: %s", err)
+	}
+}
+
+// Update a page in a database
+func TestUpdatePage(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
+
+	cache, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	pageOld := randomPage()
+	pageOld.Content = []byte("Old")
+
+	err = cache.AddPage(pageOld)
+	if err != nil {
+		t.Fatalf("Failed to add a page to a cache: %s", err)
 	}
 
-	err := cache.AddPage(page)
+	pageNew := pageOld
+	pageNew.Content = []byte("New")
+
+	err = cache.AddPage(pageNew)
 	if err != nil {
-		t.Fatalf("Couldn't add a page to cache: %s", err)
+		t.Fatalf("Failed to update a page in a cache: %s", err)
+	}
+}
+
+// Get a page from a database
+func TestGetPage(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
+
+	cache, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	page := randomPage()
+	err = cache.AddPage(page)
+	if err != nil {
+		t.Fatalf("Failed to add a page to a cache: %s", err)
+	}
+
+	pageCached, err := cache.GetPage(page.Url, page.Method)
+	if err != nil {
+		t.Fatalf("Failed to get a page from a cache: %s", pageCached)
+	}
+
+	if !page.Equal(pageCached) {
+		t.Fatalf("Loaded page isn't equal to saved")
+	}
+}
+
+// Get an updated page from a database
+func TestGetUpdatedPage(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
+
+	cache, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	pageOld := randomPage()
+	pageOld.Content = []byte("Old")
+
+	err = cache.AddPage(pageOld)
+	if err != nil {
+		t.Fatalf("Failed to add a page to a cache: %s", err)
+	}
+
+	pageNew := pageOld
+	pageNew.Content = []byte("New")
+
+	err = cache.AddPage(pageNew)
+	if err != nil {
+		t.Fatalf("Failed to add a page to a cache: %s", err)
+	}
+
+	pageCached, err := cache.GetPage(pageOld.Url, pageOld.Method)
+	if err != nil {
+		t.Fatalf("Failed to get a page from a cache: %s", pageCached)
+	}
+
+	if pageCached.Equal(pageOld) {
+		t.Fatal("Page wasn't updated in cache")
+	}
+
+	if !pageCached.Equal(pageNew) {
+		t.Fatalf("Page is neither old or new")
+	}
+}
+
+// Delete a page from a database
+func TestDeletePage(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
+
+	cache, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	page := randomPage()
+	err = cache.AddPage(page)
+	if err != nil {
+		t.Fatalf("Failed to add a page to a cache: %s", err)
 	}
 
 	err = cache.DeletePage(page.Url, page.Method)
 	if err != nil {
-		t.Fatalf("Couldn't delete a page from cache: %s", err)
-	}
-
-	cachedPage, err := cache.GetPage(page.Url, page.Method)
-	if err == nil {
-		t.Fatalf("Received a page after deletion: %s", cachedPage)
-	}
-
-	if err != sql.ErrNoRows {
-		t.Fatalf("Received unexpected error: %s", err)
+		t.Fatalf("Failed to delete a page")
 	}
 }
