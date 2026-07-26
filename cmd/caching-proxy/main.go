@@ -51,7 +51,7 @@ func main() {
 
 	handler := l.New(logDest, &slog.HandlerOptions{
 		Level:       level,
-		ReplaceAttr: l.Shortener(80),
+		ReplaceAttr: l.WithShortener(80),
 	})
 	logger := slog.New(handler)
 
