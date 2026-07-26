@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,13 +34,19 @@ func TestCreateSignerWithLogger(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
+	// Create io.ReadWriter to check logs
 	var b strings.Builder
-	logger := slog.New(slog.NewTextHandler(&b, nil))
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}
+	logger := slog.New(slog.NewTextHandler(&b, opts))
+
 	_, err := New(certPath, keyPath, testPKSize, WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
 
+	// Check for success string in the logs
 	if !strings.Contains(b.String(), "Successfully generated and saved signer") {
 		t.Fatalf("Success string isn't written to the logger")
 	}
@@ -72,8 +79,54 @@ func TestCreateSignerWithNoCache(t *testing.T) {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
 
-	if signer.cache == nil {
-		t.Fatalf("Failed to create a LRU cache")
+	if signer.cache != nil {
+		t.Fatalf("Cache was created with an invalid size")
+	}
+}
+
+// Create a Signer with keysize smaller than minimum allowed
+func TestCreateSignerWithInvalidKeySize(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "ca.cert")
+	keyPath := filepath.Join(dir, "ca.key")
+
+	_, err := New(certPath, keyPath, 100)
+	if err == nil {
+		t.Fatalf("Signer was created with invalid key size passed")
+	}
+
+	if !errors.Is(err, ErrPKGenerationFailed) {
+		t.Fatalf("Error during Signer creation was returned, but not for invalid key size")
+	}
+}
+
+// Create a Signer with invalid pathes
+func TestCreateSignerWithInvalidCertPath(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "ca.key")
+
+	_, err := New("", keyPath, testPKSize)
+	if err == nil {
+		t.Fatalf("Signer was created without an error with an invalid certificate path")
+	}
+
+	if !errors.Is(err, ErrRootCertificateFileCreationFailed) {
+		t.Fatalf("Error was returned, but it's not because of the an invalid certificate path")
+	}
+}
+
+// Create a Signer with invalid pathes
+func TestCreateSignerWithInvalidKeyPath(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "ca.cert")
+
+	_, err := New(certPath, "", testPKSize)
+	if err == nil {
+		t.Fatalf("Signer was created without an error with an invalid private key path")
+	}
+
+	if !errors.Is(err, ErrPKFileCreationFailed) {
+		t.Fatalf("Error was returned, but it's not because of the an invalid private key path")
 	}
 }
 
@@ -137,11 +190,9 @@ func TestGenerateCertificate(t *testing.T) {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
 
-	err = signer.GenerateCA()
-	if err != nil {
-		t.Fatalf("Failed to generate a new root certificate: %s", err)
-	}
+	signer.GenerateCA()
 
+	// Check if generated certificate is a valid root certificate
 	if signer.Cert == nil || !signer.Cert.IsCA {
 		t.Fatalf("Generated root certificate is invalid")
 	}
@@ -182,6 +233,9 @@ func TestInvalidPEMLoadPK(t *testing.T) {
 	}
 
 	err = os.WriteFile(keyPath, []byte("Invalid PEM"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write bytes to PK file: %s", err)
+	}
 
 	err = signer.LoadPK(keyPath)
 	if err == nil {
@@ -209,7 +263,7 @@ func TestGeneratePK(t *testing.T) {
 		t.Fatalf("Failed to generate a new private key: %s", err)
 	}
 
-	if signer.Pk == nil || signer.Pk.Size() != testPKSize {
+	if signer.Pk == nil || signer.Pk.Size() != testPKSize/8 {
 		t.Fatalf("Generated private key is invalid")
 	}
 }
@@ -255,5 +309,49 @@ func TestGenerateLeafCertificate(t *testing.T) {
 	}
 	if !bytes.Equal(leafCert.Certificate[1], signer.Cert.Raw) {
 		t.Fatalf("Generated leaf certificate is invalid")
+	}
+}
+
+// Generate a leaf certificate with cache
+func TestGenerateLeafCertificateWithCache(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "ca.cert")
+	keyPath := filepath.Join(dir, "ca.key")
+
+	signer, err := New(certPath, keyPath, testPKSize, WithCache(64))
+	if err != nil {
+		t.Fatalf("Failed to create a signer: %s", err)
+	}
+
+	url, err := u.Parse("https://example.com")
+	if err != nil {
+		t.Fatalf("Failed to parse example URL: %s", err)
+	}
+	leafCert, err := signer.GenerateLeafCertificate(*url, testPKSize)
+	if err != nil {
+		t.Fatalf("Failed to generate a leaf certificate: %s", err)
+	}
+	if !bytes.Equal(leafCert.Certificate[1], signer.Cert.Raw) {
+		t.Fatalf("Generated leaf certificate is invalid")
+	}
+
+	leafCertFromCache, ok := signer.cache.Get(url.Hostname())
+
+	if !ok {
+		t.Fatalf("Leaf certificate wasn't saved to cache")
+	}
+
+	if !slices.EqualFunc(leafCert.Certificate, leafCertFromCache.Certificate, bytes.Equal) {
+		t.Fatalf("Certificate saved to cache isn't equal to the returned one")
+	}
+
+	leafCertFromCache, err = signer.GenerateLeafCertificate(*url, testPKSize)
+
+	if err != nil {
+		t.Fatalf("Failed to generate a leaf certificate: %s", err)
+	}
+
+	if !slices.EqualFunc(leafCert.Certificate, leafCertFromCache.Certificate, bytes.Equal) {
+		t.Fatalf("Certificate returned from cache isn't equal to the cached one")
 	}
 }

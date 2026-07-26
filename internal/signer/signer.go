@@ -24,6 +24,8 @@ import (
 /* Errors */
 
 var (
+	ErrCertIsNil                         = errors.New("certificate isn't initialized")
+	ErrPKIsNil                           = errors.New("private key isn't initialized")
 	ErrPKIsNotRSA                        = errors.New("loaded PK is not an RSA PK")
 	ErrPKFileReadFailed                  = errors.New("failed to read bytes from the private key file")
 	ErrCAFileReadFailed                  = errors.New("failed to read bytes from the certificate file")
@@ -31,7 +33,6 @@ var (
 	ErrInvalidCertificatePEMBlock        = errors.New("loaded certificate is invalid")
 	ErrCAParsingFailed                   = errors.New("failed to parse root certificate")
 	ErrPKParsingFailed                   = errors.New("failed to parse private key from PKCS#8")
-	ErrSerialNumberGenerationFailed      = errors.New("failed to generate a serial number for a root certificate")
 	ErrRootCertificateCreationFailed     = errors.New("failed to create root certificate")
 	ErrFailedPKMarshal                   = errors.New("failed to marshal PKCS#8 private key")
 	ErrRootCertificateFileCreationFailed = errors.New("failed to create root certificate file")
@@ -73,10 +74,6 @@ func WithLogger(logger *slog.Logger) Option {
 // if given size argument is zero, then no cache is used
 func WithCache(size int) Option {
 	return func(signer *Signer) {
-		if size <= 0 {
-			signer.cache = nil
-			return
-		}
 		cache, err := lru.New[string, *tls.Certificate](size)
 		if err == nil {
 			signer.cache = cache
@@ -112,15 +109,13 @@ func New(certPath, keyPath string, keySize int, opts ...Option) (signer *Signer,
 		}
 	}
 
-	// Generate a new root certificate
-	if err = signer.GenerateCA(); err != nil {
-		return
-	}
-
 	// Generate a new private key
 	if err = signer.GeneratePK(keySize); err != nil {
 		return
 	}
+
+	// Generate a new root certificate
+	signer.GenerateCA()
 
 	// Save both certificate and PK at given pathes
 	if err = signer.Save(certPath, keyPath); err != nil {
@@ -161,14 +156,9 @@ func (signer *Signer) LoadCA(certPath string) (err error) {
 }
 
 // GenerateCA generates and assigns a new root certificate
-func (signer *Signer) GenerateCA() (err error) {
+func (signer *Signer) GenerateCA() {
 	// Generate random serial number for the root certificate
-	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		err = fmt.Errorf("%w: %s", ErrSerialNumberGenerationFailed, err)
-		signer.logger.Error("", "error", err)
-		return
-	}
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 
 	// Create the root certificate object
 	signer.Cert = &x509.Certificate{
@@ -184,8 +174,6 @@ func (signer *Signer) GenerateCA() (err error) {
 		IsCA:                  true,
 		MaxPathLen:            1,
 	}
-
-	return
 }
 
 // LoadPK loads a private key from the given file path
@@ -237,6 +225,13 @@ func (signer *Signer) GeneratePK(keySize int) error {
 
 // Save writes certificate and private key to the given pathes
 func (signer *Signer) Save(certPath, keyPath string) error {
+	if signer.Cert == nil {
+		return ErrCertIsNil
+	}
+	if signer.Pk == nil {
+		return ErrPKIsNil
+	}
+
 	// Certificate bytes
 	certBytes, err := x509.CreateCertificate(
 		rand.Reader,
@@ -318,10 +313,7 @@ func (signer *Signer) GenerateLeafCertificate(url u.URL, keySize int) (*tls.Cert
 	}
 
 	// Generate a random serial number for a new leaf certificate
-	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrSerialNumberGenerationFailed, err)
-	}
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 
 	// Generate a leaf certificate
 	cert := x509.Certificate{
