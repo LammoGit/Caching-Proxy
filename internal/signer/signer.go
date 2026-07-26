@@ -156,12 +156,12 @@ func (signer *Signer) LoadCA(certPath string) (err error) {
 }
 
 // GenerateCA generates and assigns a new root certificate
-func (signer *Signer) GenerateCA() {
+func (signer *Signer) GenerateCA() error {
 	// Generate random serial number for the root certificate
 	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 
-	// Create the root certificate object
-	signer.Cert = &x509.Certificate{
+	// Create the root certificate template
+	certTemplate := &x509.Certificate{
 		Version:      3,
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
@@ -174,6 +174,26 @@ func (signer *Signer) GenerateCA() {
 		IsCA:                  true,
 		MaxPathLen:            1,
 	}
+
+	// Create self-signed root certificate
+	certBytes, err := x509.CreateCertificate(
+		rand.Reader,
+		certTemplate,
+		certTemplate,
+		&signer.Pk.PublicKey,
+		signer.Pk,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrRootCertificateCreationFailed, err)
+	}
+
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrCAParsingFailed, err)
+	}
+
+	signer.Cert = cert
+	return nil
 }
 
 // LoadPK loads a private key from the given file path
@@ -232,24 +252,6 @@ func (signer *Signer) Save(certPath, keyPath string) error {
 		return ErrPKIsNil
 	}
 
-	// Certificate bytes
-	certBytes, err := x509.CreateCertificate(
-		rand.Reader,
-		signer.Cert,
-		signer.Cert,
-		&signer.Pk.PublicKey,
-		signer.Pk,
-	)
-	if err != nil {
-		return fmt.Errorf("%w: %s", ErrRootCertificateCreationFailed, err)
-	}
-
-	// Private key bytes
-	pkBytes, err := x509.MarshalPKCS8PrivateKey(signer.Pk)
-	if err != nil {
-		return fmt.Errorf("%w: %s", ErrFailedPKMarshal, err)
-	}
-
 	// Creating or truncating the certificate file
 	certFile, err := os.Create(certPath)
 	if err != nil {
@@ -260,13 +262,19 @@ func (signer *Signer) Save(certPath, keyPath string) error {
 	// Creating PEM block object for certificate
 	certBlock := pem.Block{
 		Type:  "CERTIFICATE",
-		Bytes: certBytes,
+		Bytes: signer.Cert.Raw,
 	}
 
 	// Writing encoded PEM certificate block to the certificate file
 	err = pem.Encode(certFile, &certBlock)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrCertificatePEMEncodingFailed, err)
+	}
+
+	// Private key bytes
+	pkBytes, err := x509.MarshalPKCS8PrivateKey(signer.Pk)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrFailedPKMarshal, err)
 	}
 
 	// Creating or truncating the private key file

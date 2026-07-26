@@ -3,6 +3,7 @@ package signer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -149,6 +150,9 @@ func TestLoadCertificate(t *testing.T) {
 	}
 
 	if !cert.Equal(signer.Cert) {
+		fmt.Println(signer.Cert)
+		fmt.Println()
+		fmt.Println(cert)
 		t.Fatalf("Loaded certificate isn't equal to the saved root certificate")
 	}
 }
@@ -190,7 +194,10 @@ func TestGenerateCertificate(t *testing.T) {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
 
-	signer.GenerateCA()
+	err = signer.GenerateCA()
+	if err != nil {
+		fmt.Errorf("Error during root certificate generation")
+	}
 
 	// Check if generated certificate is a valid root certificate
 	if signer.Cert == nil || !signer.Cert.IsCA {
