@@ -1,3 +1,4 @@
+// Package proxy implements base structure for caching proxy
 package proxy
 
 import (
@@ -6,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,18 +20,9 @@ import (
 	"github.com/LammoGit/Caching-Proxy/internal/signer"
 )
 
-func (proxy *Proxy) Match(req *http.Request) bool {
-	// URL matches or Referer's URL matches
-	res := proxy.Filter.Match(req.URL.String()) ||
-		proxy.Filter.Match(req.Header.Get("Referer"))
-	if res {
-		slog.Debug(fmt.Sprintf("Matched: %s", req.URL.String()))
-	} else {
-		slog.Debug(fmt.Sprintf("Didn't match: %s", req.URL.String()))
-	}
-	return res
-}
+/* Types */
 
+// ProxySettings stores settings of a Proxy object
 type ProxySettings struct {
 	ListenAddr string
 	WhitePath  string
@@ -37,49 +30,126 @@ type ProxySettings struct {
 	DBPath     string
 	CertPath   string
 	KeyPath    string
+	cacheSize  int
 }
 
+// Proxy represents caching proxy
 type Proxy struct {
 	Server   *http.Server
 	Client   *http.Client
-	Filter   *filter.Filter
-	Cache    *cache.Cache
-	Signer   *signer.Signer
 	Settings ProxySettings
+	filter   *filter.Filter
+	cache    *cache.Cache
+	signer   *signer.Signer
+	logger   *slog.Logger
 }
 
-func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string) (proxy *Proxy, err error) {
-	proxy = &Proxy{}
+/* Proxy Options */
 
-	proxy.Filter, err = filter.New(whitePath, blackPath)
+// Option functions that are ran as Proxy object is initialized
+type Option func(*Proxy)
+
+// WithLogger Option sets the given logger pointer as a logger for the Proxy
+// if the given logger pointer is nil, then Proxy's logger is set to discard log messages
+func WithLogger(logger *slog.Logger) Option {
+	return func(proxy *Proxy) {
+		if logger == nil {
+			proxy.logger = slog.New(slog.DiscardHandler)
+		} else {
+			proxy.logger = logger
+		}
+	}
+}
+
+// WithSignerCache Option sets size of the Signer's LRU cache
+func WithSignerCache(cacheSize int) Option {
+	return func(proxy *Proxy) {
+		proxy.Settings.cacheSize = max(0, cacheSize)
+	}
+}
+
+// WithClient Option sets the given client pointer as a client for the Proxy
+// if the given client pointer is nil, then it's replaced by the default client
+func WithClient(client *http.Client) Option {
+	return func(proxy *Proxy) {
+		proxy.Client = client
+	}
+}
+
+// WithTransport Option sets the given transport pointer as a transport for the Proxy's client
+// if transport is nil, then returned Option does nothing
+func WithTransport(transport *http.Transport) Option {
+	if transport == nil {
+		return func(proxy *Proxy) {}
+	} else {
+		return WithClient(&http.Client{
+			Timeout:   10 * time.Second,
+			Transport: transport,
+		})
+	}
+}
+
+/* Proxy Methods */
+
+// New returns a pointer to a new Proxy object
+// listenAddr socket at which Proxy's server would be listening
+// whitePath path to the file with whitelist filters
+// blackPath path to the file with blalcklist filters
+// dbPath path to the cache database file
+// certPath path to the certificate file
+// keyPath path to the private key file
+// keySize size of a newly generated private key in bits
+// opts functions that are ran as soon as Proxy object is initialized
+func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string, keySize int, opts ...Option) (*Proxy, error) {
+	var err error
+	proxy := &Proxy{logger: slog.New(slog.DiscardHandler)}
+
+	for _, opt := range opts {
+		opt(proxy)
+	}
+
+	proxy.filter, err = filter.New(
+		whitePath,
+		blackPath,
+		filter.WithLogger(proxy.logger),
+	)
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	proxy.Signer, err = signer.New(certPath, keyPath)
+	proxy.signer, err = signer.New(
+		certPath,
+		keyPath,
+		keySize,
+		signer.WithLogger(proxy.logger),
+		signer.WithCache(proxy.Settings.cacheSize),
+	)
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	proxy.Cache, err = cache.New(dbPath)
+	proxy.cache, err = cache.New(
+		dbPath,
+		cache.WithLogger(proxy.logger),
+	)
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 0,
-		}).DialContext,
-		TLSHandshakeTimeout: 5 * time.Second,
-		DisableKeepAlives:   true,
-		MaxIdleConns:        0,
-		IdleConnTimeout:     0,
-	}
-
-	proxy.Client = &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: transport,
+	if proxy.Client == nil {
+		proxy.Client = &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   5 * time.Second,
+					KeepAlive: 0,
+				}).DialContext,
+				TLSHandshakeTimeout: 5 * time.Second,
+				DisableKeepAlives:   true,
+				MaxIdleConns:        0,
+				IdleConnTimeout:     0,
+			},
+		}
 	}
 
 	proxy.Server = &http.Server{
@@ -102,44 +172,56 @@ func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string) (pr
 		KeyPath:    keyPath,
 	}
 
-	return
+	return proxy, nil
 }
 
+// Run prints out info about Proxy and starts listening
 func (proxy *Proxy) Run() error {
+	if proxy.Server == nil {
+		return errors.New("tried to run the Proxy with nil Server")
+	}
+
 	fmt.Printf("Starting proxy on address: %s\n", proxy.Settings.ListenAddr)
 	fmt.Printf("Cache filepath: %s\n", proxy.Settings.DBPath)
 	fmt.Printf("Pathes to certificate and key files: %s %s\n", proxy.Settings.CertPath, proxy.Settings.KeyPath)
 
 	fmt.Println("Whitelisted patterns:")
-	for _, pat := range proxy.Filter.WhitePatterns {
+	for _, pat := range proxy.filter.WhitePatterns {
 		fmt.Println(pat)
 	}
 
 	fmt.Println("Blacklisted patterns:")
-	for _, pat := range proxy.Filter.BlackPatterns {
+	for _, pat := range proxy.filter.BlackPatterns {
 		fmt.Println(pat)
 	}
 
-	defer proxy.Cache.Close()
+	defer proxy.cache.Close()
 	if err := proxy.Server.ListenAndServe(); err != nil {
 		return err
 	}
 	return nil
 }
 
+// Close closes running server and cache database connection
 func (proxy *Proxy) Close() error {
+	defer proxy.cache.Close()
 	if proxy.Server != nil {
 		return proxy.Server.Shutdown(context.Background())
 	}
 	return nil
 }
 
+// handleHTTP handles incoming HTTP requests
 func (proxy *Proxy) handleHTTP(w http.ResponseWriter, req *http.Request) {
 	matched := proxy.Match(req)
-	slog.Debug(fmt.Sprintf("HTTP %s %s", req.Method, req.URL))
+	proxy.logger.Debug("HTTP",
+		slog.String("method", req.Method),
+		slog.String("url", req.URL.String()),
+	)
 	proxy.forwardRequest(w, req, matched)
 }
 
+// handleHTTPS handles incoming HTTPS requests
 func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
@@ -149,20 +231,20 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		slog.Error("Failed to hijack connection")
+		proxy.logger.Error("Failed to hijack connection")
 		return
 	}
 	defer clientConn.Close()
 
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
-		slog.Error("Failed to write connection established")
+		proxy.logger.Error("Failed to write connection established")
 		return
 	}
 
 	url := *req.URL
-	cert, err := proxy.Signer.GenerateCertificate(url)
+	cert, err := proxy.signer.GenerateLeafCertificate(url, 2048)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to generate certificate for: %s", url.String()))
+		proxy.logger.Error(fmt.Sprintf("Failed to generate certificate for: %s", url.String()))
 		return
 	}
 
@@ -173,7 +255,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 	tlsReader := bufio.NewReader(tlsConn)
 	inReq, err := http.ReadRequest(tlsReader)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to read HTTPS request: %s", url.String()))
+		proxy.logger.Error(fmt.Sprintf("Failed to read HTTPS request: %s", url.String()))
 		return
 	}
 
@@ -182,13 +264,14 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 	inReq.RequestURI = ""
 
 	matched := proxy.Match(inReq)
-	slog.Debug(fmt.Sprintf("HTTPS %s %s", inReq.Method, inReq.URL))
+	proxy.logger.Debug(fmt.Sprintf("HTTPS %s %s", inReq.Method, inReq.URL))
 
 	bufWriter := bufio.NewWriter(tlsConn)
 	proxy.forwardRequest(bufWriter, inReq, matched)
 	bufWriter.Flush()
 }
 
+// forwardRequest handles both HTTP and decrypted HTTPS requests
 func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool) {
 	if req.URL.Scheme == "" {
 		if req.TLS != nil {
@@ -208,9 +291,9 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
 	resp, err := proxy.Client.Do(req)
 	if err != nil {
 		if matched {
-			slog.Debug(fmt.Sprintf("Couldn't reach %s %s", method, url))
+			proxy.logger.Debug(fmt.Sprintf("Couldn't reach %s %s", method, url))
 			if !proxy.LoadResponse(w, req, matched) {
-				slog.Debug(fmt.Sprintf("Couldn't load response from cache for %s %s", method, url))
+				proxy.logger.Debug(fmt.Sprintf("Couldn't load response from cache for %s %s", method, url))
 				fmt.Fprintf(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
 			}
 		}
@@ -220,23 +303,24 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to read response body for %s %s", method, url))
+		proxy.logger.Error(fmt.Sprintf("Failed to read response body for %s %s", method, url))
 	}
 
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	if err := resp.Write(w); err != nil {
-		slog.Error(fmt.Sprintf("Failed to write response to %s %s", method, url))
+		proxy.logger.Error(fmt.Sprintf("Failed to write response to %s %s", method, url))
 	}
 
 	if matched {
 		if err := proxy.SaveResponse(body, resp, req); err != nil {
-			slog.Error(fmt.Sprintf("Failed to cache %s %s", method, url))
+			proxy.logger.Error(fmt.Sprintf("Failed to cache %s %s", method, url))
 		} else {
-			slog.Debug(fmt.Sprintf("Successfully cached %s %s", method, url))
+			proxy.logger.Debug(fmt.Sprintf("Successfully cached %s %s", method, url))
 		}
 	}
 }
 
+// SaveResponse saves response to cache
 func (proxy *Proxy) SaveResponse(body []byte, resp *http.Response, req *http.Request) error {
 	headers, _ := json.Marshal(resp.Header)
 	url := req.URL.String()
@@ -248,15 +332,17 @@ func (proxy *Proxy) SaveResponse(body []byte, resp *http.Response, req *http.Req
 		Headers: headers,
 		Content: body,
 	}
-	return proxy.Cache.AddPage(page)
+	return proxy.cache.AddPage(page)
 }
 
+// LoadResponse returns response from cache given request
+// if page isn't found or request doesn't match filter, then 404 is returned
 func (proxy *Proxy) LoadResponse(w io.Writer, req *http.Request, matched bool) bool {
 	var page cache.Page
 	var err error
 
 	if matched {
-		page, err = proxy.Cache.GetPage(req.URL.String(), req.Method)
+		page, err = proxy.cache.GetPage(req.URL.String(), req.Method)
 	} else {
 		err = fmt.Errorf("%s %s didn't match", req.URL, req.Method)
 	}
@@ -279,4 +365,18 @@ func (proxy *Proxy) LoadResponse(w io.Writer, req *http.Request, matched bool) b
 		return false
 	}
 	return true
+}
+
+// Match returns true if request matches the filter
+// requests matches if its URL or Referer matches
+func (proxy *Proxy) Match(req *http.Request) bool {
+	// URL matches or Referer's URL matches
+	res := proxy.filter.Match(req.URL.String()) ||
+		proxy.filter.Match(req.Header.Get("Referer"))
+	if res {
+		proxy.logger.Debug(fmt.Sprintf("Matched: %s", req.URL.String()))
+	} else {
+		proxy.logger.Debug(fmt.Sprintf("Didn't match: %s", req.URL.String()))
+	}
+	return res
 }

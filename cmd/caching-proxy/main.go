@@ -8,6 +8,7 @@ import (
 	"os"
 
 	l "github.com/LammoGit/Caching-Proxy/internal/logger"
+	"github.com/LammoGit/Caching-Proxy/internal/proxy"
 	p "github.com/LammoGit/Caching-Proxy/internal/proxy"
 )
 
@@ -64,6 +65,9 @@ func main() {
 		*dbPath,
 		*certPath,
 		*keyPath,
+		2048,
+		proxy.WithLogger(logger),
+		proxy.WithSignerCache(128),
 	)
 	if err != nil {
 		panic(err)
