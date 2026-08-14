@@ -8,15 +8,14 @@ import (
 	"os"
 
 	l "github.com/LammoGit/Caching-Proxy/internal/logger"
-	"github.com/LammoGit/Caching-Proxy/internal/proxy"
 	p "github.com/LammoGit/Caching-Proxy/internal/proxy"
 )
 
 var (
 	listenAddr = flag.String("port", ":8080", "proxy listen address")
 	dbPath     = flag.String("db", "./cache.db", "SQLite3 cache database filepath")
-	whitePath  = flag.String("white", "./whitelist.txt", "Whitelist regex patterns filepath")
-	blackPath  = flag.String("black", "./blacklist.txt", "Blacklist regex patterns filepath")
+	whitePath  = flag.String("whitelist", "./whitelist.txt", "Whitelist regex patterns filepath")
+	blackPath  = flag.String("blacklist", "./blacklist.txt", "Blacklist regex patterns filepath")
 	certPath   = flag.String("cert", "./ca.crt", "CA certificate filepath")
 	keyPath    = flag.String("key", "./key.key", "RSA private key of CA filepath")
 	logPath    = flag.String("logger", "", "Path to save the logs")
@@ -66,8 +65,8 @@ func main() {
 		*certPath,
 		*keyPath,
 		2048,
-		proxy.WithLogger(logger),
-		proxy.WithSignerCache(128),
+		p.WithLogger(logger),
+		p.WithSignerCache(128),
 	)
 	if err != nil {
 		panic(err)
