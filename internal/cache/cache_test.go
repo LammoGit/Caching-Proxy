@@ -16,7 +16,7 @@ import (
 func randomPage() Page {
 	return Page{
 		Url:     rand.Text(),
-		Method:  rand.Text(),
+		Method:  "GET",
 		Headers: []byte(rand.Text()),
 		Content: []byte(rand.Text()),
 	}
@@ -103,6 +103,30 @@ func TestAddPage(t *testing.T) {
 	err = cache.AddPage(randomPage())
 	if err != nil {
 		t.Fatalf("Failed to add a page to a cache: %s", err)
+	}
+}
+
+// Add a page with uncachable method to a database
+func TestAddPageWithUnachableMethod(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db.db")
+
+	cache, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	page := randomPage()
+	page.Method = "POST"
+	err = cache.AddPage(page)
+
+	if err == nil {
+		t.Fatal("Cached page with an uncacheable method")
+	}
+
+	if !errors.Is(err, ErrUncachableMethod) {
+		t.Fatalf("Unexpected error was thrown during caching uncacheable page: %s", err)
 	}
 }
 

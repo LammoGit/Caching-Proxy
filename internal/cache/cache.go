@@ -16,12 +16,18 @@ import (
 //go:embed init.sql
 var initStmt string
 
+/* Globals */
+var (
+	CacheableMethods = []string{"GET", "HEAD", "OPTIONS", "QUERY"}
+)
+
 /* Errors */
 
 var (
 	ErrUnknownDriver    = errors.New("unknown SQL driver")
 	ErrInvalidDBPath    = errors.New("database path is invalid")
 	ErrInitScriptFailed = errors.New("initialization script failed")
+	ErrUncachableMethod = errors.New("page with uncachable method was given")
 )
 
 /* Types */
@@ -105,6 +111,10 @@ func New(path string, opts ...Option) (*Cache, error) {
 // AddPage inserts page object data into database
 // if URL and method combination is already taken, then rewrites
 func (cache *Cache) AddPage(page Page) (err error) {
+	if !slices.Contains(CacheableMethods, page.Method) {
+		return fmt.Errorf("%w: %s", ErrUncachableMethod, page.Method)
+	}
+
 	// Inserts page fields into table
 	// if URL and method are already taken replace headers and content
 	_, err = cache.db.Exec(`
