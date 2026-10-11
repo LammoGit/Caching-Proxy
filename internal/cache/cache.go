@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -90,7 +91,7 @@ func New(path string, opts ...Option) (*Cache, error) {
 	// Execute initialization SQL script
 	_, err = cache.db.Exec(initStmt)
 	if err != nil {
-		if err.Error() == "unable to open database file: The specified path is invalid." {
+		if strings.HasPrefix(err.Error(), "unable to open database file") {
 			err = ErrInvalidDBPath
 		} else {
 			err = fmt.Errorf("%w: %s", ErrInitScriptFailed, err)

@@ -97,7 +97,7 @@ func TestCreateFilterWithNilLogger(t *testing.T) {
 		t.Fatalf("Failed to create a filter: %s", err)
 	}
 
-	if filter.logger != nil {
+	if filter.logger == nil || filter.logger.Handler() != slog.DiscardHandler {
 		t.Fatalf("Logger is assigned")
 	}
 }

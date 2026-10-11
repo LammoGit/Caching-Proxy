@@ -204,7 +204,9 @@ func (proxy *Proxy) Run() error {
 
 // Close closes running server and cache database connection
 func (proxy *Proxy) Close() error {
-	defer proxy.cache.Close()
+	if proxy.cache != nil {
+		defer proxy.cache.Close()
+	}
 	if proxy.Server != nil {
 		return proxy.Server.Shutdown(context.Background())
 	}

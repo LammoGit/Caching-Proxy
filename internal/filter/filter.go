@@ -112,7 +112,7 @@ func New(whitePath, blackPath string, opts ...Option) (*Filter, error) {
 		filter.BlackRegex = nil
 	}
 
-	return filter, err
+	return filter, nil
 }
 
 // Match returns true if string doesn't match any of blacklisted patterns and matches any whitelisted patterns,
