@@ -10,6 +10,15 @@ import (
 	"strings"
 )
 
+// FilterMatch represents different types of matching
+type FilterMatch int
+
+const (
+	MatchBlackList FilterMatch = iota
+	MatchWhiteList
+	MatchNeither
+)
+
 // Filter is a structure implementing string filtering based on provided white and black list of regex patterns
 type Filter struct {
 	WhiteRegex    *regexp.Regexp
@@ -117,8 +126,12 @@ func New(whitePath, blackPath string, opts ...Option) (*Filter, error) {
 
 // Match returns true if string doesn't match any of blacklisted patterns and matches any whitelisted patterns,
 // otherwise false is returned
-func (filter *Filter) Match(text string) bool {
-	return (filter.BlackRegex == nil || !filter.BlackRegex.MatchString(text)) &&
-		filter.WhiteRegex != nil &&
-		filter.WhiteRegex.MatchString(text)
+func (filter *Filter) Match(text string) FilterMatch {
+	if filter.BlackRegex != nil && filter.BlackRegex.MatchString(text) {
+		return MatchBlackList
+	}
+	if filter.WhiteRegex != nil && filter.WhiteRegex.MatchString(text) {
+		return MatchWhiteList
+	}
+	return MatchNeither
 }

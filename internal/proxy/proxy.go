@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/LammoGit/Caching-Proxy/internal/cache"
@@ -215,7 +216,10 @@ func (proxy *Proxy) Close() error {
 
 // handleHTTP handles incoming HTTP requests
 func (proxy *Proxy) handleHTTP(w http.ResponseWriter, req *http.Request) {
-	matched := proxy.Match(req)
+	matchedURL := proxy.filter.Match(req.URL.String())
+	matchedReferer := proxy.filter.Match(req.Header.Get("Referer"))
+	matched := (matchedURL != filter.MatchBlackList && matchedReferer != filter.MatchBlackList) &&
+		(matchedURL == filter.MatchWhiteList || matchedReferer == filter.MatchWhiteList)
 	proxy.logger.Debug("HTTP",
 		slog.String("method", req.Method),
 		slog.String("url", req.URL.String()),
@@ -238,13 +242,53 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 	}
 	defer clientConn.Close()
 
+	url := req.URL
+	matchedURL := proxy.filter.Match(url.String())
+	if matchedURL == filter.MatchBlackList {
+		host, port, err := net.SplitHostPort(req.Host)
+		if err != nil {
+			host = req.Host
+			port = "443"
+		}
+
+		host = strings.TrimPrefix(host, "//")
+		targetAddr := net.JoinHostPort(host, port)
+
+		targetConn, err := net.DialTimeout("tcp", targetAddr, 5*time.Second)
+
+		if err != nil {
+			proxy.logger.Error(fmt.Sprintf("Failed to connect to %s: %s", url.String(), err))
+			clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+			return
+		}
+		defer targetConn.Close()
+
+		if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+			proxy.logger.Error(fmt.Sprintf("Failed to connect to %s: %s", url.String(), err))
+			return
+		}
+
+		errChan := make(chan error, 2)
+		go func() {
+			_, err := io.Copy(targetConn, clientConn)
+			errChan <- err
+		}()
+
+		go func() {
+			_, err := io.Copy(clientConn, targetConn)
+			errChan <- err
+		}()
+
+		<-errChan
+		return
+	}
+
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		proxy.logger.Error("Failed to write connection established")
 		return
 	}
 
-	url := *req.URL
-	cert, err := proxy.signer.GenerateLeafCertificate(url, 2048)
+	cert, err := proxy.signer.GenerateLeafCertificate(*url, 2048)
 	if err != nil {
 		proxy.logger.Error(fmt.Sprintf("Failed to generate certificate for: %s", url.String()))
 		return
@@ -265,7 +309,9 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 	inReq.URL.Host = inReq.Host
 	inReq.RequestURI = ""
 
-	matched := proxy.Match(inReq)
+	matchedURL = proxy.filter.Match(inReq.URL.String())
+	matchedReferer := proxy.filter.Match(inReq.Header.Get("Referer"))
+	matched := matchedURL == filter.MatchWhiteList || (matchedURL != filter.MatchBlackList && matchedReferer == filter.MatchWhiteList)
 	proxy.logger.Debug(fmt.Sprintf("HTTPS %s %s", inReq.Method, inReq.URL))
 
 	bufWriter := bufio.NewWriter(tlsConn)
@@ -367,18 +413,4 @@ func (proxy *Proxy) LoadResponse(w io.Writer, req *http.Request, matched bool) b
 		return false
 	}
 	return true
-}
-
-// Match returns true if request matches the filter
-// requests matches if its URL or Referer matches
-func (proxy *Proxy) Match(req *http.Request) bool {
-	// URL matches or Referer's URL matches
-	res := proxy.filter.Match(req.URL.String()) ||
-		proxy.filter.Match(req.Header.Get("Referer"))
-	if res {
-		proxy.logger.Debug(fmt.Sprintf("Matched: %s", req.URL.String()))
-	} else {
-		proxy.logger.Debug(fmt.Sprintf("Didn't match: %s", req.URL.String()))
-	}
-	return res
 }

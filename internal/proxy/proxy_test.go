@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	whiteFileContent = []byte("whitelist\ngraylist")
-	blackFileContent = []byte("blacklist\ngraylist")
+	whiteFileContent = []byte(".*whitelist.*\n.*graylist.*")
+	blackFileContent = []byte(".*blacklist.*\n.*graylist.*")
 
 	listenAddr = "localhost:0"
 	keySize    = 2048
@@ -452,62 +452,13 @@ func TestHTTPRequestReturnCached(t *testing.T) {
 	ts.Close()
 
 	recOffline := httptest.NewRecorder()
-
 	proxy.Server.Handler.ServeHTTP(recOffline, req)
 
 	resOffline := recOffline.Result()
+	bodyOffline, _ := io.ReadAll(resOffline.Body)
 	defer resOffline.Body.Close()
 
-	bodyOffline, _ := io.ReadAll(resOffline.Body)
 	if !bytes.Equal(bodyOnline, bodyOffline) {
 		t.Errorf("Cached page isn't equal to the one received online")
-	}
-}
-
-// Match request with whitelisted URL
-func TestMatchURL(t *testing.T) {
-	proxy, err := createProxy(t)
-	if err != nil {
-		t.Fatalf("Failed to create a proxy: %s", err)
-	}
-	defer proxy.cache.Close()
-
-	req := httptest.NewRequest(http.MethodGet, "https://whitelist.com", nil)
-	req.Header.Set("Referer", "blacklist")
-
-	if !proxy.Match(req) {
-		t.Fatal("Proxy didn't match request with a whitelisted URL")
-	}
-}
-
-// Match request with whitelisted Referer
-func TestMatchReferer(t *testing.T) {
-	proxy, err := createProxy(t)
-	if err != nil {
-		t.Fatalf("Failed to create a proxy: %s", err)
-	}
-	defer proxy.cache.Close()
-
-	req := httptest.NewRequest(http.MethodGet, "https://blacklist.com", nil)
-	req.Header.Set("Referer", "whitelist")
-
-	if !proxy.Match(req) {
-		t.Fatal("Proxy didn't match request with a whitelisted Referer")
-	}
-}
-
-// Match request with both URL and Referer blacklisted
-func TestMatchBlacklisted(t *testing.T) {
-	proxy, err := createProxy(t)
-	if err != nil {
-		t.Fatalf("Failed to create a proxy: %s", err)
-	}
-	defer proxy.cache.Close()
-
-	req := httptest.NewRequest(http.MethodGet, "https://blacklist.com", nil)
-	req.Header.Set("Referer", "blacklist")
-
-	if proxy.Match(req) {
-		t.Fatal("Proxy matched request with both URL and Referer blacklisted")
 	}
 }

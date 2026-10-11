@@ -18,7 +18,7 @@ var (
 	blacklistBytes = []byte("^\\d$\n^\\w$\n^\\s$")
 	whitelisted    = []string{"abc", "123"}
 	blacklisted    = []string{" ", "\t"}
-	graylisted     = []string{"a", "1"}
+	bothlisted     = []string{"a", "1"}
 	nonmatching    = []string{"a,", "b."}
 )
 
@@ -210,14 +210,14 @@ func TestMatchingWhitelisted(t *testing.T) {
 	res := false
 	var b strings.Builder
 	for _, value := range whitelisted {
-		if !filter.Match(value) {
+		if filter.Match(value) != MatchWhiteList {
 			fmt.Fprintf(&b, "%s\n", value)
 			res = true
 		}
 	}
 
 	if res {
-		t.Fatalf("Didn't match whitelisted:\n%s", b.String())
+		t.Fatalf("Didn't whitelist whitelisted:\n%s", b.String())
 	}
 }
 
@@ -243,19 +243,19 @@ func TestMatchingBlacklisted(t *testing.T) {
 	res := false
 	var b strings.Builder
 	for _, value := range blacklisted {
-		if filter.Match(value) {
+		if filter.Match(value) != MatchBlackList {
 			fmt.Fprintf(&b, "%s\n", value)
 			res = true
 		}
 	}
 
 	if res {
-		t.Fatalf("Matched blacklisted:\n%s", b.String())
+		t.Fatalf("Didn't blacklist blacklisted:\n%s", b.String())
 	}
 }
 
-// Match graylisted
-func TestMatchingGraylisted(t *testing.T) {
+// Match bothlisted
+func TestMatchingBothlisted(t *testing.T) {
 	dir := t.TempDir()
 	whitelistPath := filepath.Join(dir, "wl.txt")
 	blacklistPath := filepath.Join(dir, "bl.txt")
@@ -275,15 +275,15 @@ func TestMatchingGraylisted(t *testing.T) {
 
 	res := false
 	var b strings.Builder
-	for _, value := range graylisted {
-		if filter.Match(value) {
+	for _, value := range bothlisted {
+		if filter.Match(value) != MatchBlackList {
 			fmt.Fprintf(&b, "%s\n", value)
 			res = true
 		}
 	}
 
 	if res {
-		t.Fatalf("Matched both whitelisted and blacklisted:\n%s", b.String())
+		t.Fatalf("Didn't blacklist both whitelisted and blacklisted:\n%s", b.String())
 	}
 }
 
@@ -309,13 +309,13 @@ func TestMatchingNonMatching(t *testing.T) {
 	res := false
 	var b strings.Builder
 	for _, value := range nonmatching {
-		if filter.Match(value) {
+		if filter.Match(value) != MatchNeither {
 			fmt.Fprintf(&b, "%s\n", value)
 			res = true
 		}
 	}
 
 	if res {
-		t.Fatalf("Matched neither whitelisted, nor blacklisted:\n%s", b.String())
+		t.Fatalf("Mathched neither whitelisted, nor blacklisted:\n%s", b.String())
 	}
 }
