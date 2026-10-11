@@ -1,12 +1,14 @@
 package filter
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -105,13 +107,14 @@ func TestCreateFilterWithNilLogger(t *testing.T) {
 // Create a new filter with an invalid whitelist path
 func TestCreateFilterWithInvalidWhitelistPath(t *testing.T) {
 	dir := t.TempDir()
+	whitelistPath := filepath.Join(dir, "wl.txt")
 	blacklistPath := filepath.Join(dir, "bl.txt")
 
 	if err := os.WriteFile(blacklistPath, blacklistBytes, 0644); err != nil {
 		t.Fatalf("Failed to write bytes into blacklist file: %s", err)
 	}
 
-	_, err := New("", blacklistPath)
+	_, err := New(whitelistPath, blacklistPath)
 	if err == nil {
 		t.Fatalf("Created filter with an invalid path")
 	}
@@ -125,18 +128,49 @@ func TestCreateFilterWithInvalidWhitelistPath(t *testing.T) {
 func TestCreateFilterWithInvalidBlacklistPath(t *testing.T) {
 	dir := t.TempDir()
 	whitelistPath := filepath.Join(dir, "wl.txt")
+	blacklistPath := filepath.Join(dir, "bl.txt")
 
 	if err := os.WriteFile(whitelistPath, whitelistBytes, 0644); err != nil {
 		t.Fatalf("Failed to write bytes into whitelist file: %s", err)
 	}
 
-	_, err := New(whitelistPath, "")
+	_, err := New(whitelistPath, blacklistPath)
 	if err == nil {
 		t.Fatalf("Created filter with an invalid path")
 	}
 
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Error is not about the invalid blacklist path: %s", err)
+	}
+}
+
+// Create a new filter with an empty whitelist path
+func TestCreateFilterWithEmptyWhitelistPath(t *testing.T) {
+	dir := t.TempDir()
+	blacklistPath := filepath.Join(dir, "bl.txt")
+
+	if err := os.WriteFile(blacklistPath, blacklistBytes, 0644); err != nil {
+		t.Fatalf("Failed to write bytes into blacklist file: %s", err)
+	}
+
+	_, err := New("", blacklistPath)
+	if err != nil {
+		t.Fatalf("Failed to create a filter: %s", err)
+	}
+}
+
+// Create a new filter with an empty blacklist path
+func TestCreateFilterWithEmptyBlacklistPath(t *testing.T) {
+	dir := t.TempDir()
+	whitelistPath := filepath.Join(dir, "wl.txt")
+
+	if err := os.WriteFile(whitelistPath, whitelistBytes, 0644); err != nil {
+		t.Fatalf("Failed to write bytes into whitelist file: %s", err)
+	}
+
+	_, err := New(whitelistPath, "")
+	if err != nil {
+		t.Fatalf("Failed to create a filter: %s", err)
 	}
 }
 
@@ -316,6 +350,140 @@ func TestMatchingNonMatching(t *testing.T) {
 	}
 
 	if res {
-		t.Fatalf("Mathched neither whitelisted, nor blacklisted:\n%s", b.String())
+		t.Fatalf("Matched neither whitelisted, nor blacklisted:\n%s", b.String())
+	}
+}
+
+// Match blacklisted with only blacklist set
+func TestMatchBlacklistedBlackListSet(t *testing.T) {
+	dir := t.TempDir()
+	blacklistPath := filepath.Join(dir, "bl.txt")
+
+	if err := os.WriteFile(blacklistPath, blacklistBytes, 0644); err != nil {
+		t.Fatalf("Failed to write bytes into blacklist file: %s", err)
+	}
+
+	filter, err := New("", blacklistPath)
+	if err != nil {
+		t.Fatalf("Failed to create a filter: %s", err)
+	}
+
+	res := false
+	var b strings.Builder
+	for _, value := range blacklisted {
+		if filter.Match(value) != MatchBlackList {
+			fmt.Fprintf(&b, "%s\n", value)
+			res = true
+		}
+	}
+
+	if res {
+		t.Fatalf("Didn't blacklist blacklisted: \n%s", b.String())
+	}
+}
+
+// Match non-blacklisted with only blacklist set
+func TestMatchNonBlacklistedBlackListSet(t *testing.T) {
+	dir := t.TempDir()
+	blacklistPath := filepath.Join(dir, "bl.txt")
+
+	if err := os.WriteFile(blacklistPath, blacklistBytes, 0644); err != nil {
+		t.Fatalf("Failed to write bytes into blacklist file: %s", err)
+	}
+
+	filter, err := New("", blacklistPath)
+	if err != nil {
+		t.Fatalf("Failed to create a filter: %s", err)
+	}
+
+	res := false
+	var b strings.Builder
+	for _, value := range slices.Concat(whitelisted, nonmatching) {
+		if filter.Match(value) != MatchWhiteList {
+			fmt.Fprintf(&b, "%s\n", value)
+			res = true
+		}
+	}
+
+	if res {
+		t.Fatalf("Didn't whitelist non-blacklisted: \n%s", b.String())
+	}
+}
+
+// Match whitelisted with only whitelist set
+func TestMatchWhitelistedWhiteListSet(t *testing.T) {
+	dir := t.TempDir()
+	whitelistPath := filepath.Join(dir, "bl.txt")
+
+	if err := os.WriteFile(whitelistPath, whitelistBytes, 0644); err != nil {
+		t.Fatalf("Failed to write bytes into whitelist file: %s", err)
+	}
+
+	filter, err := New(whitelistPath, "")
+	if err != nil {
+		t.Fatalf("Failed to create a filter: %s", err)
+	}
+
+	res := false
+	var b strings.Builder
+	for _, value := range whitelisted {
+		if filter.Match(value) != MatchWhiteList {
+			fmt.Fprintf(&b, "%s\n", value)
+			res = true
+		}
+	}
+
+	if res {
+		t.Fatalf("Didn't whitelist whitelisted: \n%s", b.String())
+	}
+}
+
+// Match non-whitelisted with only whitelist set
+func TestMatchNonWhitelistedWhiteListSet(t *testing.T) {
+	dir := t.TempDir()
+	whitelistPath := filepath.Join(dir, "bl.txt")
+
+	if err := os.WriteFile(whitelistPath, whitelistBytes, 0644); err != nil {
+		t.Fatalf("Failed to write bytes into whitelist file: %s", err)
+	}
+
+	filter, err := New(whitelistPath, "")
+	if err != nil {
+		t.Fatalf("Failed to create a filter: %s", err)
+	}
+
+	res := false
+	var b strings.Builder
+	for _, value := range slices.Concat(blacklisted, nonmatching) {
+		if filter.Match(value) != MatchBlackList {
+			fmt.Fprintf(&b, "%s\n", value)
+			res = true
+		}
+	}
+
+	if res {
+		t.Fatalf("Didn't blacklist non-whitelisted: \n%s", b.String())
+	}
+}
+
+// Match with neither white or black lists set
+func TestMatchNeitherListSet(t *testing.T) {
+	filter, err := New("", "")
+	if err != nil {
+		t.Fatalf("Failed to create a filter: %s", err)
+	}
+
+	res := false
+	var b strings.Builder
+	for range 10 {
+		value := rand.Text()
+		if filter.Match(value) != MatchWhiteList {
+			fmt.Fprintf(&b, "%s\n", value)
+			res = true
+		}
+	}
+
+	if res {
+		t.Fatalf("Didn't whitelist with aren't set lists:\n%s", b.String())
 	}
 }

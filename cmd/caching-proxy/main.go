@@ -14,8 +14,8 @@ import (
 var (
 	listenAddr = flag.String("port", ":8080", "proxy listen address")
 	dbPath     = flag.String("db", "./cache.db", "SQLite3 cache database filepath")
-	whitePath  = flag.String("whitelist", "./whitelist.txt", "Whitelist regex patterns filepath")
-	blackPath  = flag.String("blacklist", "./blacklist.txt", "Blacklist regex patterns filepath")
+	whitePath  = flag.String("whitelist", "", "Whitelist regex patterns filepath")
+	blackPath  = flag.String("blacklist", "", "Blacklist regex patterns filepath")
 	certPath   = flag.String("cert", "./ca.crt", "CA certificate filepath")
 	keyPath    = flag.String("key", "./key.key", "RSA private key of CA filepath")
 	logPath    = flag.String("logger", "", "Path to save the logs")

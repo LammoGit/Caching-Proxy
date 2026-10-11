@@ -23,6 +23,8 @@ const (
 type Filter struct {
 	WhiteRegex    *regexp.Regexp
 	BlackRegex    *regexp.Regexp
+	WhiteListSet  bool
+	BlackListSet  bool
 	WhitePatterns []string
 	BlackPatterns []string
 	logger        *slog.Logger
@@ -52,7 +54,11 @@ func WithLogger(logger *slog.Logger) Option {
 // blackPath gives a path to the file with blacklisted regex patterns separated by a linefeed
 // opts Options that are ran at beggining of creation
 func New(whitePath, blackPath string, opts ...Option) (*Filter, error) {
-	filter := &Filter{logger: slog.New(slog.DiscardHandler)}
+	var err error
+
+	filter := &Filter{
+		logger: slog.New(slog.DiscardHandler),
+	}
 
 	// Run Option functions
 	for _, opt := range opts {
@@ -60,49 +66,60 @@ func New(whitePath, blackPath string, opts ...Option) (*Filter, error) {
 	}
 
 	// Open whitelist file
-	wlFile, err := os.Open(whitePath)
-	if err != nil {
-		filter.logger.Debug(fmt.Sprintf("Couldn't open the whitelist file at path: %s", whitePath))
-		return filter, err
-	} else {
-		filter.logger.Debug(fmt.Sprintf("Successfully opened the whitelist file at path: %s", whitePath))
+	var wlFile *os.File
+	if whitePath != "" {
+		filter.WhiteListSet = true
+		wlFile, err = os.Open(whitePath)
+		if err != nil {
+			filter.logger.Debug(fmt.Sprintf("Couldn't open the whitelist file at path: %s", whitePath))
+			return filter, err
+		} else {
+			filter.logger.Debug(fmt.Sprintf("Successfully opened the whitelist file at path: %s", whitePath))
+		}
+		defer wlFile.Close()
 	}
-	defer wlFile.Close()
 
 	// Open blacklist file
-	blFile, err := os.Open(blackPath)
-	if err != nil {
-		filter.logger.Debug(fmt.Sprintf("Couldn't open the blacklist file at path: %s", blackPath))
-		return filter, err
-	} else {
-		filter.logger.Debug(fmt.Sprintf("Successfully opened the blacklist file at path: %s", blackPath))
+	var blFile *os.File
+	if blackPath != "" {
+		filter.BlackListSet = true
+		blFile, err = os.Open(blackPath)
+		if err != nil {
+			filter.logger.Debug(fmt.Sprintf("Couldn't open the blacklist file at path: %s", blackPath))
+			return filter, err
+		} else {
+			filter.logger.Debug(fmt.Sprintf("Successfully opened the blacklist file at path: %s", blackPath))
+		}
+		defer blFile.Close()
 	}
-	defer blFile.Close()
-
-	// Initialize scanners for whitelist and blacklist files
-	wlScanner := bufio.NewScanner(wlFile)
-	blScanner := bufio.NewScanner(blFile)
 
 	// Compile regex pattern on every line and add valid patterns to a list of patterns
 	var line string
-	for wlScanner.Scan() {
-		line = wlScanner.Text()
-		_, err = regexp.Compile(line)
-		if err != nil {
-			filter.logger.Warn(fmt.Sprintf("Whitelist pattern is invalid, therefore removed: %s\n", line))
-			continue
+
+	if wlFile != nil {
+		wlScanner := bufio.NewScanner(wlFile)
+		for wlScanner.Scan() {
+			line = wlScanner.Text()
+			_, err = regexp.Compile(line)
+			if err != nil {
+				filter.logger.Warn(fmt.Sprintf("Whitelist pattern is invalid, therefore removed: %s\n", line))
+				continue
+			}
+			filter.WhitePatterns = append(filter.WhitePatterns, line)
 		}
-		filter.WhitePatterns = append(filter.WhitePatterns, line)
 	}
 
-	for blScanner.Scan() {
-		line = blScanner.Text()
-		_, err = regexp.Compile(line)
-		if err != nil {
-			filter.logger.Warn(fmt.Sprintf("Blacklist pattern is invalid, therefore removed: %s\n", line))
-			continue
+	if blFile != nil {
+		blScanner := bufio.NewScanner(blFile)
+		for blScanner.Scan() {
+			line = blScanner.Text()
+			_, err = regexp.Compile(line)
+			if err != nil {
+				filter.logger.Warn(fmt.Sprintf("Blacklist pattern is invalid, therefore removed: %s\n", line))
+				continue
+			}
+			filter.BlackPatterns = append(filter.BlackPatterns, line)
 		}
-		filter.BlackPatterns = append(filter.BlackPatterns, line)
 	}
 
 	// If no valid whitelisted patterns, then set regex pointer to nil,
@@ -124,14 +141,30 @@ func New(whitePath, blackPath string, opts ...Option) (*Filter, error) {
 	return filter, nil
 }
 
-// Match returns true if string doesn't match any of blacklisted patterns and matches any whitelisted patterns,
-// otherwise false is returned
+// Match returns matching type of the given string depending on whether lists were specified
+// returns direct matching type if both white and black lists were specified
+// blacklists non-whitelisted if only white list was specified
+// whitelists non-blacklisted if only black list was specified
+// whitelists all if neither list was specified
 func (filter *Filter) Match(text string) FilterMatch {
+	if !filter.BlackListSet && !filter.WhiteListSet {
+		return MatchWhiteList
+	}
+
 	if filter.BlackRegex != nil && filter.BlackRegex.MatchString(text) {
 		return MatchBlackList
 	}
+
 	if filter.WhiteRegex != nil && filter.WhiteRegex.MatchString(text) {
 		return MatchWhiteList
 	}
-	return MatchNeither
+
+	switch false {
+	case filter.BlackListSet:
+		return MatchBlackList
+	case filter.WhiteListSet:
+		return MatchWhiteList
+	default:
+		return MatchNeither
+	}
 }
