@@ -13,6 +13,15 @@ It intercepts requests, caches responses for URLs that match your rules, and ser
 
 ## Installation
 
+### Docker
+Ensure you have [Docker](https://www.docker.com/) installed, add `filter.yml` file, then run:
+
+```bash
+docker build -t caching-proxy .
+docker run --name=caching-proxy -p 8080:8080 caching-proxy
+```
+
+### Go
 Ensure you have [Go](https://go.dev) installed, then run:
 
 ```bash
@@ -86,11 +95,8 @@ caching-proxy
 
 ## Roadmap
 
-- Improve CLI interface
-- Container image
 - Web UI for managing proxy settings and cache
 - Support streamed content caching
-- Connect to the next proxy in chain
 
 ## License
 
