@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,10 +16,13 @@ import (
 
 func randomPage() Page {
 	return Page{
-		Url:     rand.Text(),
-		Method:  "GET",
-		Headers: []byte(rand.Text()),
-		Content: []byte(rand.Text()),
+		URL:          rand.Text(),
+		Method:       "GET",
+		StatusCode:   200,
+		Headers:      []byte(rand.Text()),
+		Content:      []byte(rand.Text()),
+		ETag:         "",
+		LastModified: "",
 	}
 }
 
@@ -62,6 +66,14 @@ func TestCacheCreationWithLogger(t *testing.T) {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
 	defer cache.Close()
+
+	if cache.logger == nil {
+		t.Fatal("Non-nil logger is set to nil")
+	}
+
+	if cache.logger.Handler() != handler {
+		t.Fatal("Non-nil logger's handler doesn't match given")
+	}
 }
 
 // Create a new Cache with a nil logger
@@ -74,6 +86,46 @@ func TestCacheCreationWithNilLogger(t *testing.T) {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
 	defer cache.Close()
+
+	if cache.logger == nil {
+		t.Fatal("Nil logger is set to nil")
+	}
+
+	if cache.logger.Handler() != slog.DiscardHandler {
+		t.Fatal("Nil logger's handler isn't set as a discard handler")
+	}
+}
+
+// Create a new Cache with a metadata LRU cache
+func TestCacheCreationWithMetaCache(t *testing.T) {
+	dir := t.TempDir()
+	groupPathes := map[string]string{"db.db": filepath.Join(dir, "db.db")}
+
+	cache, err := New(groupPathes, WithMetaCache(1024))
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	if cache.metaCache == nil {
+		t.Fatal("Didn't create a meta cache of valid size")
+	}
+}
+
+// Create a new Cache with a metadata LRU cache
+func TestCacheCreationWithMetaCacheOfInvalidSize(t *testing.T) {
+	dir := t.TempDir()
+	groupPathes := map[string]string{"db.db": filepath.Join(dir, "db.db")}
+
+	cache, err := New(groupPathes, WithMetaCache(-1))
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	if cache.metaCache != nil {
+		t.Fatal("Created a meta cache of invalid size")
+	}
 }
 
 // Create a new Cache with an invalid db path
@@ -113,16 +165,21 @@ func TestAddGetCacheablePage(t *testing.T) {
 		t.Fatalf("Failed to add a page to a cache: %s", err)
 	}
 
+	req, err := http.NewRequest(page.Method, page.URL, http.NoBody)
+	if err != nil {
+		t.Errorf("Failed to create a new request %s", err)
+	}
+
 	for group := range matched {
 		pageCached, err := cache.GetPage(map[string]struct{}{
 			group: struct{}{},
-		}, page.Url, page.Method)
+		}, req)
 		if err != nil {
-			t.Errorf("Failed to get a page from a cache for group %s", group)
+			t.Errorf("Failed to get a page from a cache for group %s, got `%s`", group, pageCached)
 		}
 
 		if !pageCached.Equal(page) {
-			t.Errorf("Page isn't equal to the original one for group %s", group)
+			t.Errorf("Page isn't equal to the original one for group %s, got `%s`", group, pageCached)
 		}
 	}
 }
@@ -192,20 +249,25 @@ func TestUpdateGetPage(t *testing.T) {
 		t.Fatalf("Failed to update a page in a cache: %s", err)
 	}
 
+	req, err := http.NewRequest(pageNew.Method, pageNew.URL, http.NoBody)
+	if err != nil {
+		t.Errorf("Failed to create a new request %s", err)
+	}
+
 	for group := range matched {
 		pageCached, err := cache.GetPage(map[string]struct{}{
 			group: struct{}{},
-		}, pageNew.Url, pageNew.Method)
+		}, req)
 		if err != nil {
 			t.Errorf("Failed to get a page from a cache for a group %s", group)
 		}
 
 		if pageCached.Equal(pageOld) {
-			t.Errorf("Page wasn't updated in cache for a group %s, got `%s`", group, pageCached)
+			t.Errorf("Page wasn't updated in cache for a group %s", group)
 		}
 
 		if !pageCached.Equal(pageNew) {
-			t.Errorf("Page is neither old or new for a group %s, got `%s`", group, pageCached)
+			t.Errorf("Page is neither old or new for a group %s", group)
 		}
 	}
 }
@@ -234,15 +296,20 @@ func TestDeletePage(t *testing.T) {
 		t.Fatalf("Failed to add a page to a cache: %s", err)
 	}
 
-	err = cache.DeletePage(matched, page.Url, page.Method)
+	err = cache.DeletePage(matched, page.URL, page.Method)
 	if err != nil {
 		t.Fatalf("Failed to delete a page")
+	}
+
+	req, err := http.NewRequest(page.Method, page.URL, http.NoBody)
+	if err != nil {
+		t.Errorf("Failed to create a new request %s", err)
 	}
 
 	for group := range matched {
 		_, err := cache.GetPage(map[string]struct{}{
 			group: struct{}{},
-		}, page.Url, page.Method)
+		}, req)
 		if err == nil {
 			t.Errorf("Got a page from a cache after deletion for group %s", group)
 		}

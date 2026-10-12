@@ -93,8 +93,7 @@ func WithTransport(transport *http.Transport) Option {
 
 // New returns a pointer to a new Proxy object
 // listenAddr socket at which Proxy's server would be listening
-// whitePath path to the file with whitelist filters
-// blackPath path to the file with blalcklist filters
+// filterPath path to the file with filters
 // dbPath path to the cache database file
 // certPath path to the certificate file
 // keyPath path to the private key file
@@ -134,6 +133,7 @@ func New(listenAddr, filterPath, dbPath, certPath, keyPath string, keySize int, 
 
 	proxy.cache, err = cache.New(
 		groupPathes,
+		cache.WithMetaCache(1024),
 		cache.WithLogger(proxy.logger),
 	)
 	if err != nil {
@@ -379,12 +379,16 @@ func (proxy *Proxy) SaveResponse(body []byte, resp *http.Response, req *http.Req
 	headers, _ := json.Marshal(resp.Header)
 	url := req.URL.String()
 	method := req.Method
+	status := resp.StatusCode
 
 	page := cache.Page{
-		Url:     url,
-		Method:  method,
-		Headers: headers,
-		Content: body,
+		URL:          url,
+		Method:       method,
+		StatusCode:   status,
+		Headers:      headers,
+		Content:      body,
+		ETag:         resp.Header.Get("ETag"),
+		LastModified: resp.Header.Get("Last-Modified"),
 	}
 	return proxy.cache.AddPage(matched, page)
 }
@@ -396,7 +400,7 @@ func (proxy *Proxy) LoadResponse(w io.Writer, req *http.Request, matched map[str
 	var err error
 
 	if len(matched) > 0 {
-		page, err = proxy.cache.GetPage(matched, req.URL.String(), req.Method)
+		page, err = proxy.cache.GetPage(matched, req)
 	} else {
 		err = fmt.Errorf("%s %s didn't match", req.URL, req.Method)
 	}
@@ -409,7 +413,7 @@ func (proxy *Proxy) LoadResponse(w io.Writer, req *http.Request, matched map[str
 	var headers http.Header
 	json.Unmarshal([]byte(page.Headers), &headers)
 
-	fmt.Fprintf(w, "HTTP/1.1 %d %s\r\n", http.StatusOK, http.StatusText(http.StatusOK))
+	fmt.Fprintf(w, "HTTP/1.1 %d %s\r\n", page.StatusCode, http.StatusText(page.StatusCode))
 	if err := headers.Write(w); err != nil {
 		return false
 	}

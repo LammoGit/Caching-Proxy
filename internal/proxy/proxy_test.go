@@ -215,7 +215,7 @@ func TestSaveResponse(t *testing.T) {
 	defer proxy.cache.Close()
 
 	body := []byte{}
-	resp := &http.Response{}
+	resp := &http.Response{StatusCode: http.StatusOK}
 	req := httptest.NewRequest(
 		http.MethodGet,
 		"https://example.com",
@@ -298,7 +298,7 @@ func TestLoadResponse(t *testing.T) {
 	defer proxy.cache.Close()
 
 	body := []byte("Response body")
-	resp := &http.Response{}
+	resp := &http.Response{StatusCode: http.StatusOK}
 	req := httptest.NewRequest(
 		http.MethodGet,
 		"https://example.com",
@@ -329,7 +329,7 @@ func TestLoadUnmatchedResponse(t *testing.T) {
 	defer proxy.cache.Close()
 
 	body := []byte("Response body")
-	resp := &http.Response{}
+	resp := &http.Response{StatusCode: http.StatusOK}
 	req := httptest.NewRequest(
 		http.MethodGet,
 		"https://example.com",
