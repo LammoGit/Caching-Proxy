@@ -40,9 +40,9 @@ func TestPageEquality(t *testing.T) {
 // Create a new Cache
 func TestCacheCreation(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
+	groupPathes := map[string]string{"db.db": filepath.Join(dir, "db.db")}
 
-	cache, err := New(dbPath)
+	cache, err := New(groupPathes)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
@@ -52,12 +52,12 @@ func TestCacheCreation(t *testing.T) {
 // Create a new Cache with a logger
 func TestCacheCreationWithLogger(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
+	groupPathes := map[string]string{"db.db": filepath.Join(dir, "db.db")}
 
 	var b strings.Builder
 	handler := slog.NewTextHandler(&b, nil)
 	logger := slog.New(handler)
-	cache, err := New(dbPath, WithLogger(logger))
+	cache, err := New(groupPathes, WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
@@ -67,9 +67,9 @@ func TestCacheCreationWithLogger(t *testing.T) {
 // Create a new Cache with a nil logger
 func TestCacheCreationWithNilLogger(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
+	groupPathes := map[string]string{"db.db": filepath.Join(dir, "db.db")}
 
-	cache, err := New(dbPath, WithLogger(nil))
+	cache, err := New(groupPathes, WithLogger(nil))
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
@@ -78,7 +78,7 @@ func TestCacheCreationWithNilLogger(t *testing.T) {
 
 // Create a new Cache with an invalid db path
 func TestCacheCreationWithInvalidDBPath(t *testing.T) {
-	cache, err := New("///")
+	cache, err := New(map[string]string{"test": "///"})
 	if err == nil {
 		t.Fatalf("Created cache with an invalid db path")
 	}
@@ -89,29 +89,57 @@ func TestCacheCreationWithInvalidDBPath(t *testing.T) {
 	}
 }
 
-// Add a page to a database
-func TestAddPage(t *testing.T) {
+// Add a cacheable page to a databases
+func TestAddGetCacheablePage(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
+	groupPathes := map[string]string{
+		"a.db": filepath.Join(dir, "a.db"),
+		"b.db": filepath.Join(dir, "b.db"),
+	}
+	matched := map[string]struct{}{
+		"a.db": struct{}{},
+		"b.db": struct{}{},
+	}
 
-	cache, err := New(dbPath)
+	cache, err := New(groupPathes)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
 	defer cache.Close()
 
-	err = cache.AddPage(randomPage())
+	page := randomPage()
+	err = cache.AddPage(matched, page)
 	if err != nil {
 		t.Fatalf("Failed to add a page to a cache: %s", err)
 	}
+
+	for group := range matched {
+		pageCached, err := cache.GetPage(map[string]struct{}{
+			group: struct{}{},
+		}, page.Url, page.Method)
+		if err != nil {
+			t.Errorf("Failed to get a page from a cache for group %s", group)
+		}
+
+		if !pageCached.Equal(page) {
+			t.Errorf("Page isn't equal to the original one for group %s", group)
+		}
+	}
 }
 
-// Add a page with uncachable method to a database
-func TestAddPageWithUnachableMethod(t *testing.T) {
+// Add an uncacheable page to a databases
+func TestAddUncacheablePage(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
+	groupPathes := map[string]string{
+		"a.db": filepath.Join(dir, "a.db"),
+		"b.db": filepath.Join(dir, "b.db"),
+	}
+	matched := map[string]struct{}{
+		"a.db": struct{}{},
+		"b.db": struct{}{},
+	}
 
-	cache, err := New(dbPath)
+	cache, err := New(groupPathes)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
@@ -119,10 +147,10 @@ func TestAddPageWithUnachableMethod(t *testing.T) {
 
 	page := randomPage()
 	page.Method = "POST"
-	err = cache.AddPage(page)
+	err = cache.AddPage(matched, page)
 
 	if err == nil {
-		t.Fatal("Cached page with an uncacheable method")
+		t.Fatal("Cached a page with unchacheable method")
 	}
 
 	if !errors.Is(err, ErrUncachableMethod) {
@@ -131,11 +159,18 @@ func TestAddPageWithUnachableMethod(t *testing.T) {
 }
 
 // Update a page in a database
-func TestUpdatePage(t *testing.T) {
+func TestUpdateGetPage(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
+	groupPathes := map[string]string{
+		"a.db": filepath.Join(dir, "a.db"),
+		"b.db": filepath.Join(dir, "b.db"),
+	}
+	matched := map[string]struct{}{
+		"a.db": struct{}{},
+		"b.db": struct{}{},
+	}
 
-	cache, err := New(dbPath)
+	cache, err := New(groupPathes)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
@@ -144,7 +179,7 @@ func TestUpdatePage(t *testing.T) {
 	pageOld := randomPage()
 	pageOld.Content = []byte("Old")
 
-	err = cache.AddPage(pageOld)
+	err = cache.AddPage(matched, pageOld)
 	if err != nil {
 		t.Fatalf("Failed to add a page to a cache: %s", err)
 	}
@@ -152,99 +187,64 @@ func TestUpdatePage(t *testing.T) {
 	pageNew := pageOld
 	pageNew.Content = []byte("New")
 
-	err = cache.AddPage(pageNew)
+	err = cache.AddPage(matched, pageNew)
 	if err != nil {
 		t.Fatalf("Failed to update a page in a cache: %s", err)
 	}
-}
 
-// Get a page from a database
-func TestGetPage(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
+	for group := range matched {
+		pageCached, err := cache.GetPage(map[string]struct{}{
+			group: struct{}{},
+		}, pageNew.Url, pageNew.Method)
+		if err != nil {
+			t.Errorf("Failed to get a page from a cache for a group %s", group)
+		}
 
-	cache, err := New(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create a cache: %s", err)
-	}
-	defer cache.Close()
+		if pageCached.Equal(pageOld) {
+			t.Errorf("Page wasn't updated in cache for a group %s, got `%s`", group, pageCached)
+		}
 
-	page := randomPage()
-	err = cache.AddPage(page)
-	if err != nil {
-		t.Fatalf("Failed to add a page to a cache: %s", err)
-	}
-
-	pageCached, err := cache.GetPage(page.Url, page.Method)
-	if err != nil {
-		t.Fatalf("Failed to get a page from a cache: %s", pageCached)
-	}
-
-	if !page.Equal(pageCached) {
-		t.Fatalf("Loaded page isn't equal to saved")
-	}
-}
-
-// Get an updated page from a database
-func TestGetUpdatedPage(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
-
-	cache, err := New(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create a cache: %s", err)
-	}
-	defer cache.Close()
-
-	pageOld := randomPage()
-	pageOld.Content = []byte("Old")
-
-	err = cache.AddPage(pageOld)
-	if err != nil {
-		t.Fatalf("Failed to add a page to a cache: %s", err)
-	}
-
-	pageNew := pageOld
-	pageNew.Content = []byte("New")
-
-	err = cache.AddPage(pageNew)
-	if err != nil {
-		t.Fatalf("Failed to add a page to a cache: %s", err)
-	}
-
-	pageCached, err := cache.GetPage(pageOld.Url, pageOld.Method)
-	if err != nil {
-		t.Fatalf("Failed to get a page from a cache: %s", pageCached)
-	}
-
-	if pageCached.Equal(pageOld) {
-		t.Fatal("Page wasn't updated in cache")
-	}
-
-	if !pageCached.Equal(pageNew) {
-		t.Fatalf("Page is neither old or new")
+		if !pageCached.Equal(pageNew) {
+			t.Errorf("Page is neither old or new for a group %s, got `%s`", group, pageCached)
+		}
 	}
 }
 
 // Delete a page from a database
 func TestDeletePage(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "db.db")
+	groupPathes := map[string]string{
+		"a.db": filepath.Join(dir, "a.db"),
+		"b.db": filepath.Join(dir, "b.db"),
+	}
+	matched := map[string]struct{}{
+		"a.db": struct{}{},
+		"b.db": struct{}{},
+	}
 
-	cache, err := New(dbPath)
+	cache, err := New(groupPathes)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
 	defer cache.Close()
 
 	page := randomPage()
-	err = cache.AddPage(page)
+	err = cache.AddPage(matched, page)
 	if err != nil {
 		t.Fatalf("Failed to add a page to a cache: %s", err)
 	}
 
-	err = cache.DeletePage(page.Url, page.Method)
+	err = cache.DeletePage(matched, page.Url, page.Method)
 	if err != nil {
 		t.Fatalf("Failed to delete a page")
+	}
+
+	for group := range matched {
+		_, err := cache.GetPage(map[string]struct{}{
+			group: struct{}{},
+		}, page.Url, page.Method)
+		if err == nil {
+			t.Errorf("Got a page from a cache after deletion for group %s", group)
+		}
 	}
 }

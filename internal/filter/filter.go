@@ -2,12 +2,13 @@
 package filter
 
 import (
-	"bufio"
 	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/goccy/go-yaml"
 )
 
 // FilterMatch represents different types of matching
@@ -19,15 +20,30 @@ const (
 	MatchNeither
 )
 
-// Filter is a structure implementing string filtering based on provided white and black list of regex patterns
-type Filter struct {
+// FilterConfig type used for storing and parsing filter config files
+type FilterConfig struct {
+	Groups []struct {
+		FileName  string   `json:"filename" yaml:"filename"`
+		WhiteList []string `json:"whitelist" yaml:"whitelist"`
+		BlackList []string `json:"blacklist" yaml:"blacklist"`
+	} `json:"groups" yaml:"groups"`
+}
+
+// FilterGroup type representing a filtering group inside of a filter
+type FilterGroup struct {
+	FileName      string
 	WhiteRegex    *regexp.Regexp
 	BlackRegex    *regexp.Regexp
 	WhiteListSet  bool
 	BlackListSet  bool
 	WhitePatterns []string
 	BlackPatterns []string
-	logger        *slog.Logger
+}
+
+// Filter is a structure implementing string filtering based on provided white and black list of regex patterns
+type Filter struct {
+	Groups map[string]FilterGroup
+	logger *slog.Logger
 }
 
 /* Filter Options */
@@ -53,10 +69,11 @@ func WithLogger(logger *slog.Logger) Option {
 // whitePath gives a path to the file with whitelisted regex patterns separated by a linefeed
 // blackPath gives a path to the file with blacklisted regex patterns separated by a linefeed
 // opts Options that are ran at beggining of creation
-func New(whitePath, blackPath string, opts ...Option) (*Filter, error) {
+func New(configPath string, opts ...Option) (*Filter, error) {
 	var err error
 
 	filter := &Filter{
+		Groups: make(map[string]FilterGroup),
 		logger: slog.New(slog.DiscardHandler),
 	}
 
@@ -65,77 +82,61 @@ func New(whitePath, blackPath string, opts ...Option) (*Filter, error) {
 		opt(filter)
 	}
 
-	// Open whitelist file
-	var wlFile *os.File
-	if whitePath != "" {
-		filter.WhiteListSet = true
-		wlFile, err = os.Open(whitePath)
-		if err != nil {
-			filter.logger.Debug(fmt.Sprintf("Couldn't open the whitelist file at path: %s", whitePath))
-			return filter, err
-		} else {
-			filter.logger.Debug(fmt.Sprintf("Successfully opened the whitelist file at path: %s", whitePath))
-		}
-		defer wlFile.Close()
+	// Read bytes from the config file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		filter.logger.Debug(fmt.Sprintf("Couldn't open the filter config file at path: %s", configPath))
+		return nil, err
 	}
 
-	// Open blacklist file
-	var blFile *os.File
-	if blackPath != "" {
-		filter.BlackListSet = true
-		blFile, err = os.Open(blackPath)
-		if err != nil {
-			filter.logger.Debug(fmt.Sprintf("Couldn't open the blacklist file at path: %s", blackPath))
-			return filter, err
-		} else {
-			filter.logger.Debug(fmt.Sprintf("Successfully opened the blacklist file at path: %s", blackPath))
-		}
-		defer blFile.Close()
+	var config FilterConfig
+	err = yaml.Unmarshal(data, &config)
+	if err != nil {
+		return nil, err
 	}
 
-	// Compile regex pattern on every line and add valid patterns to a list of patterns
-	var line string
+	for _, groupConfig := range config.Groups {
+		var group FilterGroup
 
-	if wlFile != nil {
-		wlScanner := bufio.NewScanner(wlFile)
-		for wlScanner.Scan() {
-			line = wlScanner.Text()
-			_, err = regexp.Compile(line)
+		group.FileName = groupConfig.FileName
+
+		group.BlackListSet = len(groupConfig.BlackList) != 0
+		group.WhiteListSet = len(groupConfig.WhiteList) != 0
+
+		for _, pattern := range groupConfig.BlackList {
+			_, err := regexp.Compile(pattern)
 			if err != nil {
-				filter.logger.Warn(fmt.Sprintf("Whitelist pattern is invalid, therefore removed: %s\n", line))
 				continue
 			}
-			filter.WhitePatterns = append(filter.WhitePatterns, line)
+			group.BlackPatterns = append(group.BlackPatterns, pattern)
 		}
-	}
 
-	if blFile != nil {
-		blScanner := bufio.NewScanner(blFile)
-		for blScanner.Scan() {
-			line = blScanner.Text()
-			_, err = regexp.Compile(line)
+		for _, pattern := range groupConfig.WhiteList {
+			_, err := regexp.Compile(pattern)
 			if err != nil {
-				filter.logger.Warn(fmt.Sprintf("Blacklist pattern is invalid, therefore removed: %s\n", line))
 				continue
 			}
-			filter.BlackPatterns = append(filter.BlackPatterns, line)
+			group.WhitePatterns = append(group.WhitePatterns, pattern)
 		}
-	}
 
-	// If no valid whitelisted patterns, then set regex pointer to nil,
-	// otherwise compile patterns joined with `|` separator
-	if len(filter.WhitePatterns) > 0 {
-		filter.WhiteRegex = regexp.MustCompile(strings.Join(filter.WhitePatterns, "|"))
-	} else {
-		filter.WhiteRegex = nil
-	}
+		// If no valid whitelisted patterns, then set regex pointer to nil,
+		// otherwise compile patterns joined with `|` separator
+		if len(group.WhitePatterns) > 0 {
+			group.WhiteRegex = regexp.MustCompile(strings.Join(group.WhitePatterns, "|"))
+		} else {
+			group.WhiteRegex = nil
+		}
 
-	// If no valid blacklisted patterns, then set regex pointer to nil,
-	// otherwise compile patterns joined with `|` separator
-	if len(filter.BlackPatterns) > 0 {
-		filter.BlackRegex = regexp.MustCompile(strings.Join(filter.BlackPatterns, "|"))
-	} else {
-		filter.BlackRegex = nil
+		// If no valid blacklisted patterns, then set regex pointer to nil,
+		// otherwise compile patterns joined with `|` separator
+		if len(group.BlackPatterns) > 0 {
+			group.BlackRegex = regexp.MustCompile(strings.Join(group.BlackPatterns, "|"))
+		} else {
+			group.BlackRegex = nil
+		}
+
+		// Append group to the slice of groups
+		filter.Groups[groupConfig.FileName] = group
 	}
 
 	return filter, nil
@@ -146,25 +147,36 @@ func New(whitePath, blackPath string, opts ...Option) (*Filter, error) {
 // blacklists non-whitelisted if only white list was specified
 // whitelists non-blacklisted if only black list was specified
 // whitelists all if neither list was specified
-func (filter *Filter) Match(text string) FilterMatch {
-	if !filter.BlackListSet && !filter.WhiteListSet {
+func (group *FilterGroup) Match(text string) FilterMatch {
+	if !group.BlackListSet && !group.WhiteListSet {
 		return MatchWhiteList
 	}
 
-	if filter.BlackRegex != nil && filter.BlackRegex.MatchString(text) {
+	if group.BlackRegex != nil && group.BlackRegex.MatchString(text) {
 		return MatchBlackList
 	}
 
-	if filter.WhiteRegex != nil && filter.WhiteRegex.MatchString(text) {
+	if group.WhiteRegex != nil && group.WhiteRegex.MatchString(text) {
 		return MatchWhiteList
 	}
 
 	switch false {
-	case filter.BlackListSet:
+	case group.BlackListSet:
 		return MatchBlackList
-	case filter.WhiteListSet:
+	case group.WhiteListSet:
 		return MatchWhiteList
 	default:
 		return MatchNeither
 	}
+}
+
+// Match returns a map with non-blacklisted groups' names as keys and match type as value
+func (filter *Filter) Match(text string) map[string]FilterMatch {
+	res := make(map[string]FilterMatch)
+	for groupName, group := range filter.Groups {
+		if matched := group.Match(text); matched != MatchBlackList {
+			res[groupName] = matched
+		}
+	}
+	return res
 }

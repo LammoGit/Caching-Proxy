@@ -13,9 +13,8 @@ import (
 
 var (
 	listenAddr = flag.String("port", ":8080", "proxy listen address")
-	dbPath     = flag.String("db", "./cache.db", "SQLite3 cache database filepath")
-	whitePath  = flag.String("whitelist", "", "Whitelist regex patterns filepath")
-	blackPath  = flag.String("blacklist", "", "Blacklist regex patterns filepath")
+	filterPath = flag.String("filter", "filter.yml", "YAML config file for filtering")
+	dbPath     = flag.String("db", "cache", "path to a folder storing cache")
 	certPath   = flag.String("cert", "./ca.crt", "CA certificate filepath")
 	keyPath    = flag.String("key", "./key.key", "RSA private key of CA filepath")
 	logPath    = flag.String("logger", "", "Path to save the logs")
@@ -59,8 +58,7 @@ func main() {
 
 	proxy, err := p.New(
 		*listenAddr,
-		*whitePath,
-		*blackPath,
+		*filterPath,
 		*dbPath,
 		*certPath,
 		*keyPath,

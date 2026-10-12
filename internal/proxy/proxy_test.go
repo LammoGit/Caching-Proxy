@@ -16,8 +16,22 @@ import (
 )
 
 var (
-	whiteFileContent = []byte(".*whitelist.*\n.*graylist.*")
-	blackFileContent = []byte(".*blacklist.*\n.*graylist.*")
+	filterConfigBytes = []byte(`
+storage_path: "./db"
+groups:
+  - filename: "a.db"
+    whitelist:
+      - "awhitelisted$"
+      - "shared$"
+    blacklist:
+      - "ablacklisted$"
+  - filename: "b.db"
+    whitelist:
+      - "bwhitelisted$"
+      - "shared$"
+    blacklist:
+      - "bblacklisted$"
+`)
 
 	listenAddr = "localhost:0"
 	keySize    = 2048
@@ -29,24 +43,18 @@ func createProxy(t *testing.T, opts ...Option) (*Proxy, error) {
 	t.Helper()
 
 	dir := t.TempDir()
-	whitePath := filepath.Join(dir, "whitelist.txt")
-	blackPath := filepath.Join(dir, "blacklist.txt")
-	dbPath := filepath.Join(dir, "db.txt")
+	dbPath := filepath.Join(dir, "cache")
+	filterPath := filepath.Join(dir, "filter.yml")
 	certPath := filepath.Join(dir, "cert.txt")
 	keyPath := filepath.Join(dir, "key.txt")
 
-	if err := os.WriteFile(whitePath, whiteFileContent, 0644); err != nil {
-		return nil, err
-	}
-
-	if err := os.WriteFile(blackPath, blackFileContent, 0644); err != nil {
+	if err := os.WriteFile(filterPath, filterConfigBytes, 0644); err != nil {
 		return nil, err
 	}
 
 	return New(
 		listenAddr,
-		whitePath,
-		blackPath,
+		filterPath,
 		dbPath,
 		certPath,
 		keyPath,
@@ -213,8 +221,9 @@ func TestSaveResponse(t *testing.T) {
 		"https://example.com",
 		nil,
 	)
+	matched := map[string]struct{}{"a.db": struct{}{}}
 
-	if err := proxy.SaveResponse(body, resp, req); err != nil {
+	if err := proxy.SaveResponse(body, resp, req, matched); err != nil {
 		t.Fatalf("Failed to save a response: %s", err)
 	}
 }
@@ -245,10 +254,12 @@ func TestUpdateResponse(t *testing.T) {
 		t.Fatalf("Failed to read old response body: %s", err)
 	}
 
+	matched := map[string]struct{}{"a.db": struct{}{}}
 	err = proxy.SaveResponse(
 		bodyOld,
 		respOld,
 		req,
+		matched,
 	)
 	if err != nil {
 		t.Fatalf("Failed to save a response: %s", err)
@@ -270,6 +281,7 @@ func TestUpdateResponse(t *testing.T) {
 		bodyNew,
 		respNew,
 		req,
+		matched,
 	)
 
 	if err != nil {
@@ -292,13 +304,14 @@ func TestLoadResponse(t *testing.T) {
 		"https://example.com",
 		nil,
 	)
+	matched := map[string]struct{}{"a.db": struct{}{}}
 
-	if err := proxy.SaveResponse(body, resp, req); err != nil {
+	if err := proxy.SaveResponse(body, resp, req, matched); err != nil {
 		t.Fatalf("Failed to save a response: %s", err)
 	}
 
 	var b strings.Builder
-	if ok := proxy.LoadResponse(&b, req, true); !ok {
+	if ok := proxy.LoadResponse(&b, req, matched); !ok {
 		t.Fatalf("Didn't load saved response")
 	}
 
@@ -322,13 +335,14 @@ func TestLoadUnmatchedResponse(t *testing.T) {
 		"https://example.com",
 		nil,
 	)
+	matched := map[string]struct{}{}
 
-	if err := proxy.SaveResponse(body, resp, req); err != nil {
+	if err := proxy.SaveResponse(body, resp, req, matched); err != nil {
 		t.Fatalf("Failed to save a response: %s", err)
 	}
 
 	var b strings.Builder
-	if ok := proxy.LoadResponse(&b, req, false); ok {
+	if ok := proxy.LoadResponse(&b, req, matched); ok {
 		t.Fatalf("Loaded unmatched response")
 	}
 
@@ -355,7 +369,7 @@ func TestHTTPRequest(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodGet,
-		ts.URL+"/whitelist",
+		ts.URL+"/shared",
 		nil,
 	)
 
@@ -431,7 +445,7 @@ func TestHTTPRequestReturnCached(t *testing.T) {
 	recOnline := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodGet,
-		ts.URL+"/whitelist",
+		ts.URL+"/shared",
 		nil,
 	)
 

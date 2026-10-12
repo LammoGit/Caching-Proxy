@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -42,8 +44,7 @@ type Page struct {
 
 // Cache used to manage web-pages and their contents in database
 type Cache struct {
-	path   string
-	db     *sql.DB
+	caches map[string]*sql.DB
 	logger *slog.Logger
 }
 
@@ -74,9 +75,9 @@ func WithLogger(logger *slog.Logger) Option {
 /* Cache Methods */
 
 // New returns a pointer to a new cache from the given path to a database file
-func New(path string, opts ...Option) (*Cache, error) {
+func New(groupPathes map[string]string, opts ...Option) (*Cache, error) {
 	cache := &Cache{
-		path:   path,
+		caches: make(map[string]*sql.DB),
 		logger: slog.New(slog.DiscardHandler),
 	}
 
@@ -85,90 +86,136 @@ func New(path string, opts ...Option) (*Cache, error) {
 		opt(cache)
 	}
 
-	// Initialize connection with database file
-	db, err := sql.Open("sqlite3", path)
-	if err != nil {
-		err = fmt.Errorf("%w: %s", ErrUnknownDriver, err)
-		cache.logger.Error("", slog.String("error", err.Error()))
-		return nil, err
-	}
-	cache.db = db
-
-	// Execute initialization SQL script
-	_, err = cache.db.Exec(initStmt)
-	if err != nil {
-		if strings.HasPrefix(err.Error(), "unable to open database file") {
-			err = ErrInvalidDBPath
-		} else {
-			err = fmt.Errorf("%w: %s", ErrInitScriptFailed, err)
+	// Initialize connection with database files
+	for groupName, path := range groupPathes {
+		err := os.MkdirAll(filepath.Dir(path), 0755)
+		if err != nil {
+			err = fmt.Errorf("Failed to create a directory for cache: %w", err)
+			cache.logger.Error("", slog.String("error", err.Error()))
+			return nil, err
 		}
-		cache.logger.Error("", slog.String("error", err.Error()))
+
+		db, err := sql.Open("sqlite3", path)
+		if err != nil {
+			err = fmt.Errorf("%w: %w", ErrUnknownDriver, err)
+			cache.logger.Error("", slog.String("error", err.Error()))
+			return nil, err
+		}
+		if _, ok := cache.caches[groupName]; ok {
+			continue
+		}
+		cache.caches[groupName] = db
+
+		// Execute initialization SQL script
+		_, err = db.Exec(initStmt)
+		if err != nil {
+			if strings.HasPrefix(err.Error(), "unable to open database file") {
+				err = ErrInvalidDBPath
+			} else {
+				err = fmt.Errorf("%w: %s", ErrInitScriptFailed, err)
+			}
+			cache.logger.Error("", slog.String("error", err.Error()))
+		}
+
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	return cache, err
+	return cache, nil
 }
 
 // AddPage inserts page object data into database
 // if URL and method combination is already taken, then rewrites
-func (cache *Cache) AddPage(page Page) (err error) {
+func (cache *Cache) AddPage(matched map[string]struct{}, page Page) (err error) {
 	if !slices.Contains(CacheableMethods, page.Method) {
 		return fmt.Errorf("%w: %s", ErrUncachableMethod, page.Method)
 	}
 
 	// Inserts page fields into table
 	// if URL and method are already taken replace headers and content
-	_, err = cache.db.Exec(`
+	for group := range matched {
+		groupCache, ok := cache.caches[group]
+		if !ok {
+			continue
+		}
+		_, err = groupCache.Exec(`
         INSERT INTO Pages(url, method, headers, content)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(url, method) DO UPDATE SET
             headers = excluded.headers,
             content = excluded.content;
-    `, page.Url, page.Method, page.Headers, page.Content)
-	if err != nil {
-		cache.logger.Debug(fmt.Sprintf("Failed to insert/update page: %s %s", page.Method, page.Url))
-	} else {
-		cache.logger.Debug(fmt.Sprintf("Inserted/Updated page: %s %s", page.Method, page.Url))
+    	`, page.Url, page.Method, page.Headers, page.Content)
+
+		if err != nil {
+			cache.logger.Debug(fmt.Sprintf("Failed to insert/update page: %s %s", page.Method, page.Url))
+		} else {
+			cache.logger.Debug(fmt.Sprintf("Inserted/Updated page: %s %s", page.Method, page.Url))
+		}
 	}
 	return
 }
 
 // GetPage returns page object with data from database searching by URL and method
-func (cache *Cache) GetPage(url, method string) (page Page, err error) {
+func (cache *Cache) GetPage(matched map[string]struct{}, url, method string) (page Page, err error) {
 	page.Url = url
 	page.Method = method
 
 	// Assigns page headers and page content for the given URL and method
-	err = cache.db.QueryRow(`
+	for group := range matched {
+		groupCache, ok := cache.caches[group]
+		if !ok {
+			continue
+		}
+
+		err = groupCache.QueryRow(`
         SELECT
             headers,
             content
         FROM Pages
         WHERE url = ? AND method = ?
-    `, url, method).Scan(&page.Headers, &page.Content)
-	if err != nil {
-		cache.logger.Debug(fmt.Sprintf("Failed to get the page: %s %s", method, url))
-	} else {
-		cache.logger.Debug(fmt.Sprintf("Successfully got the page: %s %s", method, url))
+   		`, url, method).Scan(&page.Headers, &page.Content)
+
+		if err != nil {
+			cache.logger.Debug(fmt.Sprintf("Failed to get the page: %s %s", method, url))
+		} else {
+			cache.logger.Debug(fmt.Sprintf("Successfully got the page: %s %s", method, url))
+		}
 	}
 	return
 }
 
 // DeletePage deletes a page with the given URL and method
-func (cache *Cache) DeletePage(url, method string) (err error) {
-	_, err = cache.db.Exec(`
+func (cache *Cache) DeletePage(matched map[string]struct{}, url, method string) (err error) {
+	for group := range matched {
+		groupCache, ok := cache.caches[group]
+		if !ok {
+			continue
+		}
+
+		_, err = groupCache.Exec(`
         DELETE FROM Pages
         WHERE url = ? AND method = ?
-    `, url, method)
-	if err != nil {
-		cache.logger.Debug(fmt.Sprintf("Failed to delete the page: %s %s", method, url))
-	} else {
-		cache.logger.Debug(fmt.Sprintf("Successfully deleted the page: %s %s", method, url))
+		`, url, method)
+
+		if err != nil {
+			cache.logger.Debug(fmt.Sprintf("Failed to delete the page: %s %s", method, url))
+		} else {
+			cache.logger.Debug(fmt.Sprintf("Successfully deleted the page: %s %s", method, url))
+		}
 	}
 	return
 }
 
 // Close closes cache's connection to the database
-func (cache *Cache) Close() error {
-	cache.logger.Debug("Closing DB connection")
-	return cache.db.Close()
+func (cache *Cache) Close() (errs map[string]error) {
+	if cache == nil || cache.caches == nil {
+		return
+	}
+	errs = make(map[string]error)
+	for group, groupCache := range cache.caches {
+		cache.logger.Debug(fmt.Sprintf("Closing %s DB connection", group))
+		errs[group] = groupCache.Close()
+	}
+	return
 }

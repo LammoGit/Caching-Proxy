@@ -7,5 +7,6 @@
 *.key
 *.out
 *.prof
+*.yml
 bin
 coverprofile

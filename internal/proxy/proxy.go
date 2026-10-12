@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,9 +27,7 @@ import (
 // ProxySettings stores settings of a Proxy object
 type ProxySettings struct {
 	ListenAddr string
-	WhitePath  string
-	BlackPath  string
-	DBPath     string
+	FilterPath string
 	CertPath   string
 	KeyPath    string
 	cacheSize  int
@@ -101,7 +100,7 @@ func WithTransport(transport *http.Transport) Option {
 // keyPath path to the private key file
 // keySize size of a newly generated private key in bits
 // opts functions that are ran as soon as Proxy object is initialized
-func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string, keySize int, opts ...Option) (*Proxy, error) {
+func New(listenAddr, filterPath, dbPath, certPath, keyPath string, keySize int, opts ...Option) (*Proxy, error) {
 	var err error
 	proxy := &Proxy{logger: slog.New(slog.DiscardHandler)}
 
@@ -110,8 +109,7 @@ func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string, key
 	}
 
 	proxy.filter, err = filter.New(
-		whitePath,
-		blackPath,
+		filterPath,
 		filter.WithLogger(proxy.logger),
 	)
 	if err != nil {
@@ -129,8 +127,13 @@ func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string, key
 		return nil, err
 	}
 
+	groupPathes := make(map[string]string)
+	for k, v := range proxy.filter.Groups {
+		groupPathes[k] = filepath.Join(dbPath, v.FileName)
+	}
+
 	proxy.cache, err = cache.New(
-		dbPath,
+		groupPathes,
 		cache.WithLogger(proxy.logger),
 	)
 	if err != nil {
@@ -166,9 +169,7 @@ func New(listenAddr, whitePath, blackPath, dbPath, certPath, keyPath string, key
 
 	proxy.Settings = ProxySettings{
 		ListenAddr: listenAddr,
-		WhitePath:  whitePath,
-		BlackPath:  blackPath,
-		DBPath:     dbPath,
+		FilterPath: filterPath,
 		CertPath:   certPath,
 		KeyPath:    keyPath,
 	}
@@ -183,18 +184,7 @@ func (proxy *Proxy) Run() error {
 	}
 
 	fmt.Printf("Starting proxy on address: %s\n", proxy.Settings.ListenAddr)
-	fmt.Printf("Cache filepath: %s\n", proxy.Settings.DBPath)
 	fmt.Printf("Pathes to certificate and key files: %s %s\n", proxy.Settings.CertPath, proxy.Settings.KeyPath)
-
-	fmt.Println("Whitelisted patterns:")
-	for _, pat := range proxy.filter.WhitePatterns {
-		fmt.Println(pat)
-	}
-
-	fmt.Println("Blacklisted patterns:")
-	for _, pat := range proxy.filter.BlackPatterns {
-		fmt.Println(pat)
-	}
 
 	defer proxy.cache.Close()
 	if err := proxy.Server.ListenAndServe(); err != nil {
@@ -218,8 +208,16 @@ func (proxy *Proxy) Close() error {
 func (proxy *Proxy) handleHTTP(w http.ResponseWriter, req *http.Request) {
 	matchedURL := proxy.filter.Match(req.URL.String())
 	matchedReferer := proxy.filter.Match(req.Header.Get("Referer"))
-	matched := (matchedURL != filter.MatchBlackList && matchedReferer != filter.MatchBlackList) &&
-		(matchedURL == filter.MatchWhiteList || matchedReferer == filter.MatchWhiteList)
+	matched := make(map[string]struct{})
+	for group, match := range matchedURL {
+		if match == filter.MatchWhiteList {
+			matched[group] = struct{}{}
+		}
+		if refMatch, ok := matchedReferer[group]; ok && refMatch == filter.MatchWhiteList {
+			matched[group] = struct{}{}
+		}
+	}
+
 	proxy.logger.Debug("HTTP",
 		slog.String("method", req.Method),
 		slog.String("url", req.URL.String()),
@@ -244,7 +242,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 
 	url := req.URL
 	matchedURL := proxy.filter.Match(url.String())
-	if matchedURL == filter.MatchBlackList {
+	if len(matchedURL) == 0 {
 		host, port, err := net.SplitHostPort(req.Host)
 		if err != nil {
 			host = req.Host
@@ -311,7 +309,15 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 
 	matchedURL = proxy.filter.Match(inReq.URL.String())
 	matchedReferer := proxy.filter.Match(inReq.Header.Get("Referer"))
-	matched := matchedURL == filter.MatchWhiteList || (matchedURL != filter.MatchBlackList && matchedReferer == filter.MatchWhiteList)
+	matched := make(map[string]struct{})
+	for group, match := range matchedURL {
+		if match == filter.MatchWhiteList {
+			matched[group] = struct{}{}
+		}
+		if refMatch, ok := matchedReferer[group]; ok && refMatch == filter.MatchWhiteList {
+			matched[group] = struct{}{}
+		}
+	}
 	proxy.logger.Debug(fmt.Sprintf("HTTPS %s %s", inReq.Method, inReq.URL))
 
 	bufWriter := bufio.NewWriter(tlsConn)
@@ -320,7 +326,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 }
 
 // forwardRequest handles both HTTP and decrypted HTTPS requests
-func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool) {
+func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched map[string]struct{}) {
 	if req.URL.Scheme == "" {
 		if req.TLS != nil {
 			req.URL.Scheme = "https"
@@ -338,7 +344,7 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
 
 	resp, err := proxy.Client.Do(req)
 	if err != nil {
-		if matched {
+		if len(matched) > 0 {
 			proxy.logger.Debug(fmt.Sprintf("Couldn't reach %s %s", method, url))
 			if !proxy.LoadResponse(w, req, matched) {
 				proxy.logger.Debug(fmt.Sprintf("Couldn't load response from cache for %s %s", method, url))
@@ -359,8 +365,8 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
 		proxy.logger.Error(fmt.Sprintf("Failed to write response to %s %s", method, url))
 	}
 
-	if matched {
-		if err := proxy.SaveResponse(body, resp, req); err != nil {
+	if len(matched) > 0 {
+		if err := proxy.SaveResponse(body, resp, req, matched); err != nil {
 			proxy.logger.Error(fmt.Sprintf("Failed to cache %s %s", method, url))
 		} else {
 			proxy.logger.Debug(fmt.Sprintf("Successfully cached %s %s", method, url))
@@ -369,7 +375,7 @@ func (proxy *Proxy) forwardRequest(w io.Writer, req *http.Request, matched bool)
 }
 
 // SaveResponse saves response to cache
-func (proxy *Proxy) SaveResponse(body []byte, resp *http.Response, req *http.Request) error {
+func (proxy *Proxy) SaveResponse(body []byte, resp *http.Response, req *http.Request, matched map[string]struct{}) error {
 	headers, _ := json.Marshal(resp.Header)
 	url := req.URL.String()
 	method := req.Method
@@ -380,17 +386,17 @@ func (proxy *Proxy) SaveResponse(body []byte, resp *http.Response, req *http.Req
 		Headers: headers,
 		Content: body,
 	}
-	return proxy.cache.AddPage(page)
+	return proxy.cache.AddPage(matched, page)
 }
 
 // LoadResponse returns response from cache given request
 // if page isn't found or request doesn't match filter, then 404 is returned
-func (proxy *Proxy) LoadResponse(w io.Writer, req *http.Request, matched bool) bool {
+func (proxy *Proxy) LoadResponse(w io.Writer, req *http.Request, matched map[string]struct{}) bool {
 	var page cache.Page
 	var err error
 
-	if matched {
-		page, err = proxy.cache.GetPage(req.URL.String(), req.Method)
+	if len(matched) > 0 {
+		page, err = proxy.cache.GetPage(matched, req.URL.String(), req.Method)
 	} else {
 		err = fmt.Errorf("%s %s didn't match", req.URL, req.Method)
 	}
