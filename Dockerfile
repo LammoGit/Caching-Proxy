@@ -13,10 +13,16 @@ RUN go build -o /app/main ./cmd/caching-proxy
 
 FROM debian:bookworm-slim AS final
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /root/
 
 COPY --from=builder /app/main .
 COPY ./filter.yml .
+COPY ./ca.crt .
+COPY ./key.key .
 
 EXPOSE 8080
 

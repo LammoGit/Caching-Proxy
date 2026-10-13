@@ -3,6 +3,10 @@
 package signer
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -26,7 +30,6 @@ import (
 var (
 	ErrCertIsNil                         = errors.New("certificate isn't initialized")
 	ErrPKIsNil                           = errors.New("private key isn't initialized")
-	ErrPKIsNotRSA                        = errors.New("loaded PK is not an RSA PK")
 	ErrPKFileReadFailed                  = errors.New("failed to read bytes from the private key file")
 	ErrCAFileReadFailed                  = errors.New("failed to read bytes from the certificate file")
 	ErrInvalidPKPEMBlock                 = errors.New("loaded private key is invalid")
@@ -39,20 +42,36 @@ var (
 	ErrCertificatePEMEncodingFailed      = errors.New("failed to write root certificate using PEM encoding to a file")
 	ErrPKFileCreationFailed              = errors.New("failed to open/create private key file")
 	ErrPKPEMEncodingFailed               = errors.New("failed to write private key using PEM encoding to a file")
-	ErrPKGenerationFailed                = errors.New("failed to generate RSA private key")
+	ErrPKGenerationFailed                = errors.New("failed to generate private key")
 	ErrCacheInitFailed                   = errors.New("failed to initialize LRU cache")
 	ErrLeafCertificateGenerationFailed   = errors.New("failed to create leaf certificate")
 )
 
+/* Globals */
+var (
+	ECDSAEllipticCurve = elliptic.P256()
+	RSAKeySize         = 2048
+)
+
 /* Signer Type */
+
+// KeyType enumeration of possible key types
+type KeyType uint
+
+const (
+	RSAKeyType KeyType = iota
+	ECDSAKeyType
+	ED25519KeyType
+)
 
 // Signer generates certificates and primary keys
 type Signer struct {
-	Cert   *x509.Certificate
-	Pk     *rsa.PrivateKey
-	logger *slog.Logger
-	cache  *lru.Cache[string, *tls.Certificate]
-	mu     sync.RWMutex
+	Cert    *x509.Certificate
+	Pk      crypto.PrivateKey
+	logger  *slog.Logger
+	cache   *lru.Cache[string, *tls.Certificate]
+	keyType KeyType
+	mu      sync.RWMutex
 }
 
 // Option represents functions that are used for initial configuration of a Signer object
@@ -87,9 +106,10 @@ func WithCache(size int) Option {
 
 // New creates a new Signer object and returns pointer to it
 // accepts pathes to certificate and key files, PK size in bits, and Option functions for configuration
-func New(certPath, keyPath string, keySize int, opts ...Option) (signer *Signer, err error) {
+func New(certPath, keyPath string, keyType KeyType, opts ...Option) (signer *Signer, err error) {
 	signer = &Signer{
-		logger: slog.New(slog.DiscardHandler),
+		logger:  slog.New(slog.DiscardHandler),
+		keyType: keyType,
 	}
 
 	for _, opt := range opts {
@@ -102,15 +122,28 @@ func New(certPath, keyPath string, keySize int, opts ...Option) (signer *Signer,
 		signer.Cert != nil && signer.Pk != nil &&
 		signer.Cert.IsCA && signer.Cert.BasicConstraintsValid {
 
-		pub, ok := signer.Cert.PublicKey.(*rsa.PublicKey)
-		if ok && pub.Equal(&signer.Pk.PublicKey) {
-			signer.logger.Debug("Loaded existing CA and private key")
-			return
+		pub := signer.Cert.PublicKey
+		switch pk := signer.Pk.(type) {
+		case *rsa.PrivateKey:
+			if pub, ok := pub.(*rsa.PublicKey); ok && pub.Equal(&pk.PublicKey) {
+				signer.logger.Debug("Loaded existing CA and private key")
+				return
+			}
+		case *ed25519.PrivateKey:
+			if pub, ok := pub.(*ed25519.PublicKey); ok && pub.Equal(pk.Public()) {
+				signer.logger.Debug("Loaded existing CA and private key")
+				return
+			}
+		case *ecdsa.PrivateKey:
+			if pub, ok := pub.(*ecdsa.PublicKey); ok && pub.Equal(&pk.PublicKey) {
+				signer.logger.Debug("Loaded existing CA and private key")
+				return
+			}
 		}
 	}
 
 	// Generate a new private key
-	if err = signer.GeneratePK(keySize); err != nil {
+	if err = signer.GeneratePK(); err != nil {
 		return
 	}
 
@@ -175,12 +208,22 @@ func (signer *Signer) GenerateCA() error {
 		MaxPathLen:            1,
 	}
 
+	var pub any
+	switch pk := signer.Pk.(type) {
+	case *rsa.PrivateKey:
+		pub = &pk.PublicKey
+	case *ed25519.PrivateKey:
+		pub = pk.Public()
+	case *ecdsa.PrivateKey:
+		pub = &pk.PublicKey
+	}
+
 	// Create self-signed root certificate
 	certBytes, err := x509.CreateCertificate(
 		rand.Reader,
 		certTemplate,
 		certTemplate,
-		&signer.Pk.PublicKey,
+		pub,
 		signer.Pk,
 	)
 	if err != nil {
@@ -206,7 +249,7 @@ func (signer *Signer) LoadPK(keyPath string) (err error) {
 		return
 	}
 
-	// Decode private key from PEM bytes to RSA PK
+	// Decode private key from PEM bytes to PK
 	pkBlock, _ := pem.Decode(pkPEMBytes)
 	if pkBlock == nil {
 		err = ErrInvalidPKPEMBlock
@@ -220,22 +263,25 @@ func (signer *Signer) LoadPK(keyPath string) (err error) {
 		signer.logger.Error("", "error", err)
 		return
 	}
-	var ok bool
-	signer.Pk, ok = pk.(*rsa.PrivateKey)
-	if !ok {
-		err = ErrPKIsNotRSA
-		signer.logger.Error("", "error", err)
-		return
-	}
+	signer.Pk = pk
 
 	signer.logger.Debug("Successfully loaded private key")
 	return
 }
 
-// GeneratePK generates and assigns a new random RSA private key of the given size
-func (signer *Signer) GeneratePK(keySize int) error {
+// GeneratePK generates and assigns a new random private key of the given size
+func (signer *Signer) GeneratePK() error {
 	// Generate random private key
-	pk, err := rsa.GenerateKey(rand.Reader, keySize)
+	var pk crypto.PrivateKey
+	var err error
+	switch signer.keyType {
+	case RSAKeyType:
+		pk, err = rsa.GenerateKey(rand.Reader, RSAKeySize)
+	case ECDSAKeyType:
+		pk, err = ecdsa.GenerateKey(ECDSAEllipticCurve, rand.Reader)
+	case ED25519KeyType:
+		_, pk, err = ed25519.GenerateKey(rand.Reader)
+	}
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrPKGenerationFailed, err)
 	}
@@ -300,7 +346,7 @@ func (signer *Signer) Save(certPath, keyPath string) error {
 }
 
 // GenerateLeafCertificate generates a new leaf certificate for the given URL of the given size
-func (signer *Signer) GenerateLeafCertificate(url u.URL, keySize int) (*tls.Certificate, error) {
+func (signer *Signer) GenerateLeafCertificate(url u.URL) (*tls.Certificate, error) {
 	hostname := url.Hostname()
 
 	// Check if certificate is in cache and if it exists
@@ -315,7 +361,17 @@ func (signer *Signer) GenerateLeafCertificate(url u.URL, keySize int) (*tls.Cert
 	}
 
 	// Generate a new random private key
-	pk, err := rsa.GenerateKey(rand.Reader, keySize)
+
+	var pk crypto.PrivateKey
+	var err error
+	switch signer.keyType {
+	case RSAKeyType:
+		pk, err = rsa.GenerateKey(rand.Reader, RSAKeySize)
+	case ECDSAKeyType:
+		pk, err = ecdsa.GenerateKey(ECDSAEllipticCurve, rand.Reader)
+	case ED25519KeyType:
+		_, pk, err = ed25519.GenerateKey(rand.Reader)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrPKGenerationFailed, err)
 	}
@@ -337,12 +393,22 @@ func (signer *Signer) GenerateLeafCertificate(url u.URL, keySize int) (*tls.Cert
 		DNSNames:    []string{hostname},
 	}
 
+	var pub any
+	switch pk := pk.(type) {
+	case *rsa.PrivateKey:
+		pub = &pk.PublicKey
+	case *ed25519.PrivateKey:
+		pub = pk.Public()
+	case *ecdsa.PrivateKey:
+		pub = &pk.PublicKey
+	}
+
 	// Sign the leaf certificate and get its bytes
 	certBytes, err := x509.CreateCertificate(
 		rand.Reader,
 		&cert,
 		signer.Cert,
-		&pk.PublicKey,
+		pub,
 		signer.Pk,
 	)
 	if err != nil {

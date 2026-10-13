@@ -2,6 +2,9 @@ package signer
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,16 +17,13 @@ import (
 	u "net/url"
 )
 
-// Test Config
-const testPKSize = 2048
-
 // Create Signer
 func TestCreateSigner(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	_, err := New(certPath, keyPath, testPKSize)
+	_, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -42,7 +42,7 @@ func TestCreateSignerWithLogger(t *testing.T) {
 	}
 	logger := slog.New(slog.NewTextHandler(&b, opts))
 
-	_, err := New(certPath, keyPath, testPKSize, WithLogger(logger))
+	_, err := New(certPath, keyPath, ECDSAKeyType, WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -59,7 +59,7 @@ func TestCreateSignerWithCache(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize, WithCache(8))
+	signer, err := New(certPath, keyPath, ECDSAKeyType, WithCache(8))
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -75,7 +75,7 @@ func TestCreateSignerWithNoCache(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize, WithCache(-1))
+	signer, err := New(certPath, keyPath, ECDSAKeyType, WithCache(-1))
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -85,28 +85,12 @@ func TestCreateSignerWithNoCache(t *testing.T) {
 	}
 }
 
-// Create a Signer with keysize smaller than minimum allowed
-func TestCreateSignerWithInvalidKeySize(t *testing.T) {
-	dir := t.TempDir()
-	certPath := filepath.Join(dir, "ca.cert")
-	keyPath := filepath.Join(dir, "ca.key")
-
-	_, err := New(certPath, keyPath, 100)
-	if err == nil {
-		t.Fatalf("Signer was created with invalid key size passed")
-	}
-
-	if !errors.Is(err, ErrPKGenerationFailed) {
-		t.Fatalf("Error during Signer creation was returned, but not for invalid key size")
-	}
-}
-
 // Create a Signer with invalid pathes
 func TestCreateSignerWithInvalidCertPath(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "ca.key")
 
-	_, err := New("", keyPath, testPKSize)
+	_, err := New("", keyPath, ECDSAKeyType)
 	if err == nil {
 		t.Fatalf("Signer was created without an error with an invalid certificate path")
 	}
@@ -121,7 +105,7 @@ func TestCreateSignerWithInvalidKeyPath(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "ca.cert")
 
-	_, err := New(certPath, "", testPKSize)
+	_, err := New(certPath, "", ECDSAKeyType)
 	if err == nil {
 		t.Fatalf("Signer was created without an error with an invalid private key path")
 	}
@@ -137,7 +121,7 @@ func TestLoadCertificate(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize)
+	signer, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -163,7 +147,7 @@ func TestIvalidPEMLoadCertificate(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize)
+	signer, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -189,7 +173,7 @@ func TestGenerateCertificate(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize)
+	signer, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -211,20 +195,36 @@ func TestLoadPK(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize)
+	signer, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
 
-	pk := *signer.Pk
+	pk := signer.Pk
 	signer.Pk = nil
 	err = signer.LoadPK(keyPath)
 	if err != nil {
 		t.Fatalf("Failed to load a private key: %s", err)
 	}
 
-	if !pk.Equal(signer.Pk) {
-		t.Fatalf("Loaded private key isn't equal to the saved private key")
+	switch pk := pk.(type) {
+	case *rsa.PrivateKey:
+		spk, ok := signer.Pk.(*rsa.PrivateKey)
+		if !ok || !pk.Equal(spk) {
+			t.Fatalf("Loaded private key isn't equal to the saved private key")
+		}
+	case *ecdsa.PrivateKey:
+		spk, ok := signer.Pk.(*ecdsa.PrivateKey)
+		if !ok || !pk.Equal(spk) {
+			t.Fatalf("Loaded private key isn't equal to the saved private key")
+		}
+	case *ed25519.PrivateKey:
+		spk, ok := signer.Pk.(*ed25519.PrivateKey)
+		if !ok || !pk.Equal(spk) {
+			t.Fatalf("Loaded private key isn't equal to the saved private key")
+		}
+	default:
+		t.Fatalf("Private key type isn't supported")
 	}
 }
 
@@ -234,7 +234,7 @@ func TestInvalidPEMLoadPK(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize)
+	signer, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -260,17 +260,17 @@ func TestGeneratePK(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize)
+	signer, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
 
-	err = signer.GeneratePK(testPKSize)
+	err = signer.GeneratePK()
 	if err != nil {
 		t.Fatalf("Failed to generate a new private key: %s", err)
 	}
 
-	if signer.Pk == nil || signer.Pk.Size() != testPKSize/8 {
+	if signer.Pk == nil {
 		t.Fatalf("Generated private key is invalid")
 	}
 }
@@ -281,16 +281,34 @@ func TestSignerSave(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize)
+	signer, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
 
-	signerNew, err := New(certPath, keyPath, testPKSize)
+	signerNew, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
-	if !signerNew.Pk.Equal(signer.Pk) || !signerNew.Cert.Equal(signer.Cert) {
+
+	switch pk := signerNew.Pk.(type) {
+	case *rsa.PrivateKey:
+		spk, ok := signer.Pk.(*rsa.PrivateKey)
+		if !ok || !pk.Equal(spk) {
+			t.Fatalf("Loaded private key isn't equal to the saved private key")
+		}
+	case *ecdsa.PrivateKey:
+		spk, ok := signer.Pk.(*ecdsa.PrivateKey)
+		if !ok || !pk.Equal(spk) {
+			t.Fatalf("Loaded private key isn't equal to the saved private key")
+		}
+	case *ed25519.PrivateKey:
+		spk, ok := signer.Pk.(*ed25519.PrivateKey)
+		if !ok || !pk.Equal(spk) {
+			t.Fatalf("Loaded private key isn't equal to the saved private key")
+		}
+	}
+	if !signerNew.Cert.Equal(signer.Cert) {
 		t.Fatalf("Loaded certificate and private key aren't equal to saved")
 	}
 }
@@ -301,7 +319,7 @@ func TestGenerateLeafCertificate(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize)
+	signer, err := New(certPath, keyPath, ECDSAKeyType)
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -310,7 +328,7 @@ func TestGenerateLeafCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to parse example URL: %s", err)
 	}
-	leafCert, err := signer.GenerateLeafCertificate(*url, testPKSize)
+	leafCert, err := signer.GenerateLeafCertificate(*url)
 	if err != nil {
 		t.Fatalf("Failed to generate a leaf certificate: %s", err)
 	}
@@ -325,7 +343,7 @@ func TestGenerateLeafCertificateWithCache(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.cert")
 	keyPath := filepath.Join(dir, "ca.key")
 
-	signer, err := New(certPath, keyPath, testPKSize, WithCache(64))
+	signer, err := New(certPath, keyPath, ECDSAKeyType, WithCache(64))
 	if err != nil {
 		t.Fatalf("Failed to create a signer: %s", err)
 	}
@@ -334,7 +352,7 @@ func TestGenerateLeafCertificateWithCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to parse example URL: %s", err)
 	}
-	leafCert, err := signer.GenerateLeafCertificate(*url, testPKSize)
+	leafCert, err := signer.GenerateLeafCertificate(*url)
 	if err != nil {
 		t.Fatalf("Failed to generate a leaf certificate: %s", err)
 	}
@@ -352,7 +370,7 @@ func TestGenerateLeafCertificateWithCache(t *testing.T) {
 		t.Fatalf("Certificate saved to cache isn't equal to the returned one")
 	}
 
-	leafCertFromCache, err = signer.GenerateLeafCertificate(*url, testPKSize)
+	leafCertFromCache, err = signer.GenerateLeafCertificate(*url)
 
 	if err != nil {
 		t.Fatalf("Failed to generate a leaf certificate: %s", err)

@@ -36,7 +36,6 @@ groups:
 `)
 
 	listenAddr = "localhost:0"
-	keySize    = 2048
 )
 
 /* Utility Functions */
@@ -60,8 +59,8 @@ func createProxy(t *testing.T, opts ...Option) (*Proxy, error) {
 		filterPath,
 		dbPath,
 		certPath,
+		"ecdsa",
 		keyPath,
-		keySize,
 		opts...,
 	)
 }
@@ -314,8 +313,8 @@ groups:
 		filterPath,
 		dbPath,
 		certPath,
+		"ecdsa",
 		keyPath,
-		keySize,
 	)
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
@@ -427,8 +426,8 @@ groups:
 		filterPath,
 		dbPath,
 		certPath,
+		"ecdsa",
 		keyPath,
-		keySize,
 	)
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
@@ -461,8 +460,8 @@ groups:
 		filterPath,
 		dbPath,
 		certPath,
+		"ecdsa",
 		keyPath,
-		keySize,
 	)
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)

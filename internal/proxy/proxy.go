@@ -127,7 +127,7 @@ func WithTransport(transport *http.Transport) Option {
 /* Proxy Methods */
 
 // New returns a pointer to a new Proxy object
-func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyPath string, keySize int, opts ...Option) (*Proxy, error) {
+func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyTypeString, keyPath string, opts ...Option) (*Proxy, error) {
 	var err error
 	proxy := &Proxy{logger: slog.New(slog.DiscardHandler)}
 
@@ -170,10 +170,20 @@ func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyPath string, ke
 		return nil, err
 	}
 
+	var keyType signer.KeyType
+	switch strings.ToLower(keyTypeString) {
+	case "rsa":
+		keyType = signer.RSAKeyType
+	case "ecdsa":
+		keyType = signer.ECDSAKeyType
+	case "ed25519":
+		keyType = signer.ED25519KeyType
+	}
+
 	proxy.signer, err = signer.New(
 		certPath,
 		keyPath,
-		keySize,
+		keyType,
 		signer.WithLogger(proxy.logger),
 		signer.WithCache(proxy.Settings.cacheSize),
 	)
@@ -399,7 +409,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	cert, err := proxy.signer.GenerateLeafCertificate(*url, 2048)
+	cert, err := proxy.signer.GenerateLeafCertificate(*url)
 	if err != nil {
 		proxy.logger.Error("failed to generate certificate",
 			slog.String("host", url.String()),

@@ -1,5 +1,5 @@
 *.txt
-*.db
+*.db*
 *.sum
 *.cert
 *.cer

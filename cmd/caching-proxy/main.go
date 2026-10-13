@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
+	"strings"
 
 	l "github.com/LammoGit/Caching-Proxy/internal/logger"
 	p "github.com/LammoGit/Caching-Proxy/internal/proxy"
@@ -16,17 +18,32 @@ var (
 	proxyAddr  = flag.String("proxy", "", "URL through which to route connections")
 	filterPath = flag.String("filter", "filter.yml", "YAML config file for filtering")
 	dbPath     = flag.String("db", "cache", "path to a folder storing cache")
-	certPath   = flag.String("cert", "./ca.crt", "CA certificate filepath")
-	keyPath    = flag.String("key", "./key.key", "RSA private key of CA filepath")
+	certPath   = flag.String("cert", "./ca.crt", "filepath to CA certificate")
+	keyPath    = flag.String("key", "./key.key", "filepath to CA's private key")
+	keyType    = flag.String("key_type", "ecdsa", "key type used for signing (rsa, ecdsa, ed25519)")
 	logPath    = flag.String("logger", "", "Path to save the logs")
-	verbosity  = flag.String("v", "info", "Level of verbosity (error, warning, info debug)")
+	verbosity  = flag.String("v", "info", "Level of verbosity (error, warning, info, debug)")
 )
+
+func validateArgs() error {
+	if !slices.Contains([]string{"rsa", "ecdsa", "ed25519"}, strings.ToLower(*keyType)) {
+		return fmt.Errorf("invalid key type, only `rsa`, `ecdsa`, and `ed25519` are supported: %s", *keyType)
+	}
+	if !slices.Contains([]string{"error", "warning", "info", "debug"}, strings.ToLower(*verbosity)) {
+		return fmt.Errorf("invalid verbosity level, only `error`, `warning`, `info`, and `debug` are supported: %s", *verbosity)
+	}
+	return nil
+}
 
 func main() {
 	flag.Parse()
 
+	if err := validateArgs(); err != nil {
+		panic(err)
+	}
+
 	var level slog.Level
-	switch *verbosity {
+	switch strings.ToLower(*verbosity) {
 	case "debug":
 		level = slog.LevelDebug
 	case "warning", "warn":
@@ -63,8 +80,8 @@ func main() {
 		*filterPath,
 		*dbPath,
 		*certPath,
+		*keyType,
 		*keyPath,
-		2048,
 		p.WithLogger(logger),
 		p.WithSignerCache(128),
 	)
