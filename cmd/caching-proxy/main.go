@@ -13,6 +13,7 @@ import (
 
 var (
 	listenAddr = flag.String("port", ":8080", "proxy listen address")
+	proxyAddr  = flag.String("proxy", "", "URL through which to route connections")
 	filterPath = flag.String("filter", "filter.yml", "YAML config file for filtering")
 	dbPath     = flag.String("db", "cache", "path to a folder storing cache")
 	certPath   = flag.String("cert", "./ca.crt", "CA certificate filepath")
@@ -58,6 +59,7 @@ func main() {
 
 	proxy, err := p.New(
 		*listenAddr,
+		*proxyAddr,
 		*filterPath,
 		*dbPath,
 		*certPath,

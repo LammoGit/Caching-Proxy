@@ -45,6 +45,8 @@ Usage of caching-proxy:
     	Path to save the logs
   -port string
     	proxy listen address (default ":8080")
+  -proxy string
+    	URL through which to route connections
   -v string
     	Level of verbosity (error, warning, info debug) (default "info")
 ```
@@ -96,7 +98,7 @@ caching-proxy
 ## Roadmap
 
 - Web UI for managing proxy settings and cache
-- Support streamed content caching
+- Support partial content caching
 
 ## License
 

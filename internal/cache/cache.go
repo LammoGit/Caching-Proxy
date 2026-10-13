@@ -149,7 +149,7 @@ func New(groupPathes map[string]string, opts ...Option) (*Cache, error) {
 			return nil, err
 		}
 
-		db, err := sql.Open("sqlite3", path)
+		db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_cache_size=-20000")
 		if err != nil {
 			err = fmt.Errorf("%w: %w", ErrUnknownDriver, err)
 			cache.logger.Error("", slog.String("error", err.Error()))

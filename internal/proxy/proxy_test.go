@@ -22,15 +22,17 @@ groups:
   - filename: "a.db"
     whitelist:
       - "awhitelisted$"
-      - "shared$"
+      - "sharedwhitelisted$"
     blacklist:
       - "ablacklisted$"
+      - "sharedblacklisted$"
   - filename: "b.db"
     whitelist:
       - "bwhitelisted$"
-      - "shared$"
+      - "sharedwhitelisted$"
     blacklist:
       - "bblacklisted$"
+      - "sharedblacklisted$"
 `)
 
 	listenAddr = "localhost:0"
@@ -54,6 +56,7 @@ func createProxy(t *testing.T, opts ...Option) (*Proxy, error) {
 
 	return New(
 		listenAddr,
+		"",
 		filterPath,
 		dbPath,
 		certPath,
@@ -71,7 +74,7 @@ func TestProxyCreation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 }
 
 // Create a new Proxy with a logger
@@ -81,7 +84,7 @@ func TestProxyCreationWithLogger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 
 	if proxy.logger != logger {
 		t.Fatalf("Attached to proxy logger isn't equal to the passed logger")
@@ -94,7 +97,7 @@ func TestProxyCreationWithNilLogger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 
 	if proxy.logger.Handler() != slog.DiscardHandler {
 		t.Fatalf("Attached logger when nil logger was passed")
@@ -107,7 +110,7 @@ func TestProxyCreationWithSignerCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 }
 
 // Create a new Proxy with negative signer cache size
@@ -116,7 +119,7 @@ func TestProxyCreationWithNegativeSignerCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 }
 
 // Create a new Proxy with http.Client
@@ -126,7 +129,7 @@ func TestProxyCreationWithClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 
 	if proxy.Client != client {
 		t.Fatal("Proxies client isn't equal to passed")
@@ -140,7 +143,7 @@ func TestProxyCreationWithTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 
 	if proxy.Client.Transport != transport {
 		t.Fatal("Proxy's transport isn't equal to the passed")
@@ -153,7 +156,7 @@ func TestProxyCreationWithNilTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 
 	if proxy.Client == nil {
 		t.Fatal("Proxy's client is equal to nil")
@@ -170,7 +173,7 @@ func TestRunProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -206,154 +209,6 @@ func TestCloseProxyWithNilServer(t *testing.T) {
 	}
 }
 
-// Save response
-func TestSaveResponse(t *testing.T) {
-	proxy, err := createProxy(t)
-	if err != nil {
-		t.Fatalf("Failed to create a proxy: %s", err)
-	}
-	defer proxy.cache.Close()
-
-	body := []byte{}
-	resp := &http.Response{StatusCode: http.StatusOK}
-	req := httptest.NewRequest(
-		http.MethodGet,
-		"https://example.com",
-		nil,
-	)
-	matched := map[string]struct{}{"a.db": struct{}{}}
-
-	if err := proxy.SaveResponse(body, resp, req, matched); err != nil {
-		t.Fatalf("Failed to save a response: %s", err)
-	}
-}
-
-// Update response
-func TestUpdateResponse(t *testing.T) {
-	proxy, err := createProxy(t)
-	if err != nil {
-		t.Fatalf("Failed to create a proxy: %s", err)
-	}
-	defer proxy.cache.Close()
-
-	req := httptest.NewRequest(
-		http.MethodGet,
-		"https://example.com",
-		nil,
-	)
-
-	wOld := httptest.NewRecorder()
-	wOld.WriteHeader(http.StatusOK)
-	_, _ = wOld.WriteString("Response Old")
-
-	respOld := wOld.Result()
-	defer respOld.Body.Close()
-
-	bodyOld, err := io.ReadAll(respOld.Body)
-	if err != nil {
-		t.Fatalf("Failed to read old response body: %s", err)
-	}
-
-	matched := map[string]struct{}{"a.db": struct{}{}}
-	err = proxy.SaveResponse(
-		bodyOld,
-		respOld,
-		req,
-		matched,
-	)
-	if err != nil {
-		t.Fatalf("Failed to save a response: %s", err)
-	}
-
-	wNew := httptest.NewRecorder()
-	wNew.WriteHeader(http.StatusOK)
-	_, _ = wNew.WriteString("Response New")
-
-	respNew := wNew.Result()
-	defer respNew.Body.Close()
-
-	bodyNew, err := io.ReadAll(respNew.Body)
-	if err != nil {
-		t.Fatalf("Failed to read new response body: %s", err)
-	}
-
-	err = proxy.SaveResponse(
-		bodyNew,
-		respNew,
-		req,
-		matched,
-	)
-
-	if err != nil {
-		t.Fatalf("Failed to update a response: %s", err)
-	}
-}
-
-// Load response
-func TestLoadResponse(t *testing.T) {
-	proxy, err := createProxy(t)
-	if err != nil {
-		t.Fatalf("Failed to create a proxy: %s", err)
-	}
-	defer proxy.cache.Close()
-
-	body := []byte("Response body")
-	resp := &http.Response{StatusCode: http.StatusOK}
-	req := httptest.NewRequest(
-		http.MethodGet,
-		"https://example.com",
-		nil,
-	)
-	matched := map[string]struct{}{"a.db": struct{}{}}
-
-	if err := proxy.SaveResponse(body, resp, req, matched); err != nil {
-		t.Fatalf("Failed to save a response: %s", err)
-	}
-
-	var b strings.Builder
-	if ok := proxy.LoadResponse(&b, req, matched); !ok {
-		t.Fatalf("Didn't load saved response")
-	}
-
-	if b.String() != "HTTP/1.1 200 OK\r\n\r\nResponse body" {
-		t.Fatal("Loaded wrong page from proxy's cache")
-	}
-}
-
-// Load unmatched response
-func TestLoadUnmatchedResponse(t *testing.T) {
-	proxy, err := createProxy(t)
-	if err != nil {
-		t.Fatalf("Failed to create a proxy: %s", err)
-	}
-	defer proxy.cache.Close()
-
-	body := []byte("Response body")
-	resp := &http.Response{StatusCode: http.StatusOK}
-	req := httptest.NewRequest(
-		http.MethodGet,
-		"https://example.com",
-		nil,
-	)
-	matched := map[string]struct{}{}
-
-	if err := proxy.SaveResponse(body, resp, req, matched); err != nil {
-		t.Fatalf("Failed to save a response: %s", err)
-	}
-
-	var b strings.Builder
-	if ok := proxy.LoadResponse(&b, req, matched); ok {
-		t.Fatalf("Loaded unmatched response")
-	}
-
-	if b.String() != "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n" {
-		t.Fatal("Returned response isn't empty 404")
-	}
-}
-
-// Load updated response
-func TestLoadUpdatedResponse(t *testing.T) {}
-
 // Handle HTTP request
 func TestHTTPRequest(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -364,12 +219,12 @@ func TestHTTPRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodGet,
-		ts.URL+"/shared",
+		ts.URL+"/sharedwhitelisted",
 		nil,
 	)
 
@@ -399,7 +254,73 @@ func TestHTTPSRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
+
+	proxyServer := httptest.NewServer(proxy.Server.Handler)
+	defer proxyServer.Close()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+
+	transport := ts.Client().Transport.(*http.Transport).Clone()
+
+	transport.Proxy = http.ProxyURL(proxyURL)
+
+	transport.TLSClientConfig.InsecureSkipVerify = true
+
+	client := &http.Client{Transport: transport}
+
+	res, err := client.Get(ts.URL)
+	if err != nil {
+		t.Fatalf("Failed to execute request through proxy: %s", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", res.StatusCode)
+	}
+
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "Page Content") {
+		t.Errorf("Expected 'Page Content', got: %s", string(body))
+	}
+}
+
+// Handle Blacklisted HTTPS request
+func TestBlacklistedHTTPSRequest(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "Page Content")
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "cache")
+	filterPath := filepath.Join(dir, "filter.yml")
+	certPath := filepath.Join(dir, "cert.txt")
+	keyPath := filepath.Join(dir, "key.txt")
+
+	data := []byte(`
+groups:
+  - filename: "db.db"
+    blacklist:
+      - ".*"
+`)
+	if err := os.WriteFile(filterPath, data, 0644); err != nil {
+		t.Fatalf("Failed to create a proxy: %s", err)
+	}
+
+	proxy, err := New(
+		listenAddr,
+		"",
+		filterPath,
+		dbPath,
+		certPath,
+		keyPath,
+		keySize,
+	)
+	if err != nil {
+		t.Fatalf("Failed to create a proxy: %s", err)
+	}
+	defer proxy.Close()
 
 	proxyServer := httptest.NewServer(proxy.Server.Handler)
 	defer proxyServer.Close()
@@ -440,12 +361,12 @@ func TestHTTPRequestReturnCached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
-	defer proxy.cache.Close()
+	defer proxy.Close()
 
 	recOnline := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodGet,
-		ts.URL+"/shared",
+		ts.URL+"/sharedwhitelisted",
 		nil,
 	)
 
@@ -474,5 +395,105 @@ func TestHTTPRequestReturnCached(t *testing.T) {
 
 	if !bytes.Equal(bodyOnline, bodyOffline) {
 		t.Errorf("Cached page isn't equal to the one received online")
+	}
+}
+
+// Handle Blacklisted HTTPS request with proxy
+func TestBlacklistedHTTPSRequestWithProxy(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "Page Content")
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "cache")
+	filterPath := filepath.Join(dir, "filter.yml")
+	certPath := filepath.Join(dir, "cert.txt")
+	keyPath := filepath.Join(dir, "key.txt")
+
+	data := []byte(`
+groups:
+  - filename: "db.db"
+    blacklist:
+      - ".*"
+`)
+	if err := os.WriteFile(filterPath, data, 0644); err != nil {
+		t.Fatalf("Failed to create a proxy: %s", err)
+	}
+
+	secondProxy, err := New(
+		listenAddr,
+		"",
+		filterPath,
+		dbPath,
+		certPath,
+		keyPath,
+		keySize,
+	)
+	if err != nil {
+		t.Fatalf("Failed to create a proxy: %s", err)
+	}
+	defer secondProxy.Close()
+
+	dir = t.TempDir()
+	dbPath = filepath.Join(dir, "cache")
+	filterPath = filepath.Join(dir, "filter.yml")
+	certPath = filepath.Join(dir, "cert.txt")
+	keyPath = filepath.Join(dir, "key.txt")
+
+	data = []byte(`
+groups:
+  - filename: "db.db"
+    blacklist:
+      - ".*"
+`)
+	if err := os.WriteFile(filterPath, data, 0644); err != nil {
+		t.Fatalf("Failed to create a proxy: %s", err)
+	}
+
+	secondProxyServer := httptest.NewServer(secondProxy.Server.Handler)
+	defer secondProxyServer.Close()
+	secondProxyURL, _ := url.Parse(secondProxyServer.URL)
+
+	firstProxy, err := New(
+		listenAddr,
+		secondProxyURL.String(),
+		filterPath,
+		dbPath,
+		certPath,
+		keyPath,
+		keySize,
+	)
+	if err != nil {
+		t.Fatalf("Failed to create a proxy: %s", err)
+	}
+	defer firstProxy.Close()
+
+	proxyServer := httptest.NewServer(firstProxy.Server.Handler)
+	defer proxyServer.Close()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+
+	transport := ts.Client().Transport.(*http.Transport).Clone()
+
+	transport.Proxy = http.ProxyURL(proxyURL)
+
+	transport.TLSClientConfig.InsecureSkipVerify = true
+
+	client := &http.Client{Transport: transport}
+
+	res, err := client.Get(ts.URL)
+	if err != nil {
+		t.Fatalf("Failed to execute request through proxy: %s", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", res.StatusCode)
+	}
+
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "Page Content") {
+		t.Errorf("Expected 'Page Content', got: %s", string(body))
 	}
 }
