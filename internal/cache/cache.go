@@ -4,7 +4,6 @@ package cache
 import (
 	"database/sql"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,38 +17,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-//go:embed init.sql
-var initStmt string
-
-/* Globals */
-var (
-	CacheableMethods     = []string{"GET", "HEAD", "OPTIONS", "QUERY"}
-	CacheableStatusCodes = []int{200, 203, 301, 404, 405, 410, 414, 501}
-)
-
-/* Errors */
-
-var (
-	ErrUnknownDriver        = errors.New("unknown SQL driver")
-	ErrInvalidDBPath        = errors.New("database path is invalid")
-	ErrInitScriptFailed     = errors.New("initialization script failed")
-	ErrUncachableMethod     = errors.New("page with uncachable method was given")
-	ErrUncachableStatusCode = errors.New("page with uncachable status code was given")
-)
-
-/* Types */
-
-// Page holds web-page's contents
-type Page struct {
-	URL          string
-	Method       string
-	StatusCode   int
-	Headers      []byte
-	Content      []byte
-	ETag         string
-	LastModified string
-}
-
 // Cache used to manage web-pages and their contents in database
 type cacheKey struct{ url, method string }
 type Cache struct {
@@ -57,70 +24,6 @@ type Cache struct {
 	metaCache *lru.Cache[cacheKey, Page]
 	logger    *slog.Logger
 }
-
-/* Page Methods */
-
-// Equal method that returns true if two pages are equal
-func (page Page) Equal(other Page) bool {
-	return page.URL == other.URL &&
-		page.Method == other.Method &&
-		page.StatusCode == other.StatusCode &&
-		page.ETag == other.ETag &&
-		page.LastModified == other.LastModified &&
-		slices.Equal(page.Headers, other.Headers) &&
-		slices.Equal(page.Content, other.Content)
-}
-
-// String returns string representation of a page
-func (page Page) String() string {
-	v := map[string]any{
-		"url":           page.URL,
-		"method":        page.Method,
-		"status_code":   page.StatusCode,
-		"headers":       string(page.Headers),
-		"content":       string(page.Content),
-		"etag":          page.ETag,
-		"last_modified": page.LastModified,
-	}
-	s, _ := json.Marshal(v)
-	return string(s)
-}
-
-/* Cache Options */
-
-// Option functions that are ran as Cache object is initialized
-type Option func(*Cache)
-
-// WithLogger Option sets the given logger pointer as a logger for the Cache
-// if the given logger pointer is nil, then Cache's logger is set to discard log messages
-func WithLogger(logger *slog.Logger) Option {
-	return func(cache *Cache) {
-		if logger == nil {
-			cache.logger = slog.New(slog.DiscardHandler)
-		} else {
-			cache.logger = logger
-		}
-	}
-}
-
-// WithMetaCache Option sets the given size for the Cache's LRU cache pointer
-// if the given size is 0, then Cache's LRU cache is set to nil
-func WithMetaCache(size int) Option {
-	return func(cache *Cache) {
-		if size < 1 {
-			cache.metaCache = nil
-			return
-		}
-		c, err := lru.New[cacheKey, Page](size)
-		if err != nil {
-			cache.logger.Error("failed to create meta cache", slog.String("error", err.Error()))
-			return
-		}
-		cache.metaCache = c
-	}
-}
-
-/* Cache Methods */
 
 // New returns a pointer to a new cache from the given path to a database file
 func New(groupPathes map[string]string, opts ...Option) (*Cache, error) {
@@ -324,96 +227,6 @@ func (cache *Cache) GetPage(matched map[string]struct{}, req *http.Request) (Pag
 		return Page{URL: url, Method: method}, lastErr
 	}
 	return Page{URL: url, Method: method}, sql.ErrNoRows
-}
-
-// getRow fetches a single cached page for an exact (url, method) pair.
-// Returns sql.ErrNoRows if the pair is not cached.
-func getRow(db *sql.DB, url, method string) (Page, error) {
-	p := Page{URL: url, Method: method}
-	err := db.QueryRow(`
-		SELECT status_code, headers, content, etag, last_modified
-		FROM Pages
-		WHERE url = ? AND method = ?
-	`, url, method).Scan(
-		&p.StatusCode,
-		&p.Headers,
-		&p.Content,
-		&p.ETag,
-		&p.LastModified,
-	)
-	return p, err
-}
-
-// applyConditional evaluates preconditions against a cached page.
-// If a precondition fails or resolves to "not modified", the returned Page
-// has StatusCode set to 412 or 304 respectively and Content cleared.
-func applyConditional(page Page, ifMatch, ifNoneMatch, ifModifiedSince, ifUnmodifiedSince string) Page {
-	// If-Match: strong comparison; failure => 412.
-	if ifMatch != "" && !etagMatches(ifMatch, page.ETag, true) {
-		page.StatusCode = http.StatusPreconditionFailed
-		page.Content = nil
-		return page
-	}
-
-	// If-Unmodified-Since: fail if resource was modified after the given date.
-	if ifUnmodifiedSince != "" && page.LastModified != "" {
-		if t1, err1 := http.ParseTime(ifUnmodifiedSince); err1 == nil {
-			if t2, err2 := http.ParseTime(page.LastModified); err2 == nil && t2.After(t1) {
-				page.StatusCode = http.StatusPreconditionFailed
-				page.Content = nil
-				return page
-			}
-		}
-	}
-
-	// If-None-Match: match => 304 for GET/HEAD, 412 for others.
-	if ifNoneMatch != "" && etagMatches(ifNoneMatch, page.ETag, false) {
-		if page.Method == http.MethodGet || page.Method == http.MethodHead {
-			page.StatusCode = http.StatusNotModified
-		} else {
-			page.StatusCode = http.StatusPreconditionFailed
-		}
-		page.Content = nil
-		return page
-	}
-
-	// If-Modified-Since: only honored when If-None-Match is absent (RFC 9110 §13.1.3).
-	if ifModifiedSince != "" && ifNoneMatch == "" && page.LastModified != "" {
-		if t1, err1 := http.ParseTime(ifModifiedSince); err1 == nil {
-			if t2, err2 := http.ParseTime(page.LastModified); err2 == nil && !t2.After(t1) {
-				page.StatusCode = http.StatusNotModified
-				page.Content = nil
-				return page
-			}
-		}
-	}
-
-	return page
-}
-
-// etagMatches checks an If-Match/If-None-Match header value against a stored
-// ETag. Handles "*" and comma-separated lists. When strong is true, weak
-// (W/) tags never match; when false, W/ is stripped before comparison.
-func etagMatches(header, etag string, strong bool) bool {
-	header = strings.TrimSpace(header)
-	if header == "*" {
-		return etag != ""
-	}
-	for _, candidate := range strings.Split(header, ",") {
-		candidate = strings.TrimSpace(candidate)
-		if strong {
-			if !strings.HasPrefix(candidate, "W/") &&
-				!strings.HasPrefix(etag, "W/") &&
-				candidate == etag {
-				return true
-			}
-		} else {
-			if strings.TrimPrefix(candidate, "W/") == strings.TrimPrefix(etag, "W/") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // DeletePage removes the cached page for (url, method) from every matched group.
