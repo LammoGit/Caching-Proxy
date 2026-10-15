@@ -11,8 +11,8 @@ import (
 // ColorHandler represents slog handler with colored output
 type ColorHandler struct {
 	slog.Handler
-	w  io.Writer
-	mu sync.Mutex
+	w  io.Writer  // Writer to which logs are written
+	mu sync.Mutex // Mutex for syncing writes
 }
 
 // New returns a pointer to a new colored handler
