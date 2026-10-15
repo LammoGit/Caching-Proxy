@@ -6,14 +6,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -25,45 +23,6 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-/* Errors */
-
-var (
-	ErrCertIsNil                         = errors.New("certificate isn't initialized")
-	ErrPKIsNil                           = errors.New("private key isn't initialized")
-	ErrPKFileReadFailed                  = errors.New("failed to read bytes from the private key file")
-	ErrCAFileReadFailed                  = errors.New("failed to read bytes from the certificate file")
-	ErrInvalidPKPEMBlock                 = errors.New("loaded private key is invalid")
-	ErrInvalidCertificatePEMBlock        = errors.New("loaded certificate is invalid")
-	ErrCAParsingFailed                   = errors.New("failed to parse root certificate")
-	ErrPKParsingFailed                   = errors.New("failed to parse private key from PKCS#8")
-	ErrRootCertificateCreationFailed     = errors.New("failed to create root certificate")
-	ErrFailedPKMarshal                   = errors.New("failed to marshal PKCS#8 private key")
-	ErrRootCertificateFileCreationFailed = errors.New("failed to create root certificate file")
-	ErrCertificatePEMEncodingFailed      = errors.New("failed to write root certificate using PEM encoding to a file")
-	ErrPKFileCreationFailed              = errors.New("failed to open/create private key file")
-	ErrPKPEMEncodingFailed               = errors.New("failed to write private key using PEM encoding to a file")
-	ErrPKGenerationFailed                = errors.New("failed to generate private key")
-	ErrCacheInitFailed                   = errors.New("failed to initialize LRU cache")
-	ErrLeafCertificateGenerationFailed   = errors.New("failed to create leaf certificate")
-)
-
-/* Globals */
-var (
-	ECDSAEllipticCurve = elliptic.P256()
-	RSAKeySize         = 2048
-)
-
-/* Signer Type */
-
-// KeyType enumeration of possible key types
-type KeyType uint
-
-const (
-	RSAKeyType KeyType = iota
-	ECDSAKeyType
-	ED25519KeyType
-)
-
 // Signer generates certificates and primary keys
 type Signer struct {
 	Cert    *x509.Certificate
@@ -73,36 +32,6 @@ type Signer struct {
 	keyType KeyType
 	mu      sync.RWMutex
 }
-
-// Option represents functions that are used for initial configuration of a Signer object
-type Option func(*Signer)
-
-/* Signer Options */
-
-// WithLogger Option that is used to set a signer.logger to a Signer
-// if passed signer.logger pointer is nil, then logging messages are discarded
-func WithLogger(logger *slog.Logger) Option {
-	return func(signer *Signer) {
-		if logger != nil {
-			signer.logger = logger
-		}
-	}
-}
-
-// WithCache Option that is used to set a LRU cache size to a Signer
-// if given size argument is zero, then no cache is used
-func WithCache(size int) Option {
-	return func(signer *Signer) {
-		cache, err := lru.New[string, *tls.Certificate](size)
-		if err == nil {
-			signer.cache = cache
-		} else {
-			signer.cache = nil
-		}
-	}
-}
-
-/* Signer Methods */
 
 // New creates a new Signer object and returns pointer to it
 // accepts pathes to certificate and key files, PK size in bits, and Option functions for configuration

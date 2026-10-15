@@ -27,28 +27,6 @@ import (
 	"github.com/LammoGit/Caching-Proxy/internal/signer"
 )
 
-/* Helpers */
-
-// normalizeProxyAddr converts string URL to the *url.URL
-func normalizeProxyAddr(raw string) (*url.URL, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, err
-	}
-	if u.Host == "" {
-		return nil, fmt.Errorf("proxy address %s has no host", raw)
-	}
-	return u, nil
-}
-
-/* Types */
-
 // ProxySettings stores settings of a Proxy object
 type ProxySettings struct {
 	ProxyURL   *url.URL
@@ -80,51 +58,6 @@ type Proxy struct {
 	saveWg    sync.WaitGroup
 	closeOnce sync.Once
 }
-
-/* Proxy Options */
-
-// Option functions that are ran as Proxy object is initialized
-type Option func(*Proxy)
-
-// WithLogger Option sets the given logger pointer as a logger for the Proxy
-// if the given logger pointer is nil, then Proxy's logger is set to discard log messages
-func WithLogger(logger *slog.Logger) Option {
-	return func(proxy *Proxy) {
-		if logger == nil {
-			proxy.logger = slog.New(slog.DiscardHandler)
-		} else {
-			proxy.logger = logger
-		}
-	}
-}
-
-// WithSignerCache Option sets size of the Signer's LRU cache
-func WithSignerCache(cacheSize int) Option {
-	return func(proxy *Proxy) {
-		proxy.Settings.cacheSize = max(0, cacheSize)
-	}
-}
-
-// WithClient Option sets the given client pointer as a client for the Proxy
-// if the given client pointer is nil, then it's replaced by the default client
-func WithClient(client *http.Client) Option {
-	return func(proxy *Proxy) {
-		proxy.Client = client
-	}
-}
-
-// WithTransport Option sets the given transport pointer as a transport for the Proxy's client
-// If transport is nil, the returned Option does nothing
-func WithTransport(transport *http.Transport) Option {
-	if transport == nil {
-		return func(proxy *Proxy) {}
-	}
-	return func(proxy *Proxy) {
-		proxy.Client = &http.Client{Transport: transport}
-	}
-}
-
-/* Proxy Methods */
 
 // New returns a pointer to a new Proxy object
 func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyTypeString, keyPath string, opts ...Option) (*Proxy, error) {
@@ -621,60 +554,4 @@ type bufferedConn struct {
 
 func (c *bufferedConn) Read(p []byte) (int, error) {
 	return c.r.Read(p)
-}
-
-// proxyFromEnv resolves an upstream proxy URL for a raw
-// TCP target from the standard environment variables
-func proxyFromEnv(targetHost string) *url.URL {
-	if noProxyMatch(targetHost) {
-		return nil
-	}
-
-	_, port, err := net.SplitHostPort(targetHost)
-	if err != nil {
-		port = "443"
-	}
-
-	var keys []string
-	if port == "443" {
-		keys = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"}
-	} else {
-		keys = []string{"HTTP_PROXY", "http_proxy"}
-	}
-
-	for _, k := range keys {
-		v := os.Getenv(k)
-		if v == "" {
-			continue
-		}
-		u, err := url.Parse(v)
-		if err == nil && u.Host != "" {
-			return u
-		}
-	}
-	return nil
-}
-
-// noProxyMatch returns true if target matches
-// one of domain wildcrads in NO_PROXY environment variable
-func noProxyMatch(target string) bool {
-	npx := os.Getenv("NO_PROXY")
-	if npx == "" {
-		npx = os.Getenv("no_proxy")
-	}
-	if npx == "" {
-		return false
-	}
-	host, _, _ := net.SplitHostPort(target)
-	if host == "" {
-		host = target
-	}
-	for _, entry := range strings.Split(npx, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "*" || entry == host ||
-			strings.HasSuffix(host, "."+strings.TrimPrefix(entry, ".")) {
-			return true
-		}
-	}
-	return false
 }

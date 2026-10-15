@@ -46,25 +46,6 @@ type Filter struct {
 	logger *slog.Logger
 }
 
-/* Filter Options */
-
-// Option type for functions that are run at start of creation on a filter
-type Option func(*Filter)
-
-// WithLogger is an Option that attaches given logger to a filter
-// if logger pointer is nil, then log messages are discarded
-func WithLogger(logger *slog.Logger) Option {
-	return func(filter *Filter) {
-		if logger == nil {
-			filter.logger = slog.New(slog.DiscardHandler)
-		} else {
-			filter.logger = logger
-		}
-	}
-}
-
-/* Filter Methods */
-
 // New is a function that returns a pointer to a new filter
 // whitePath gives a path to the file with whitelisted regex patterns separated by a linefeed
 // blackPath gives a path to the file with blacklisted regex patterns separated by a linefeed
