@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"fmt"
 	"log/slog"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -31,7 +32,7 @@ func WithMetaCache(size int) Option {
 		}
 		c, err := lru.New[cacheKey, Page](size)
 		if err != nil {
-			cache.logger.Error("failed to create meta cache", slog.String("error", err.Error()))
+			cache.logger.Error(fmt.Sprintf("Failed to create meta cache: %s", err))
 			return
 		}
 		cache.metaCache = c

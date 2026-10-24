@@ -12,8 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-/* Utility Functions */
-
+// Generate a Page with random contents
 func randomPage() Page {
 	return Page{
 		URL:          rand.Text(),
@@ -26,8 +25,6 @@ func randomPage() Page {
 	}
 }
 
-/* Page Tests */
-
 // Check Page equality
 func TestPageEquality(t *testing.T) {
 	const checks = 10
@@ -38,8 +35,6 @@ func TestPageEquality(t *testing.T) {
 		}
 	}
 }
-
-/* Cache Tests */
 
 // Create a new Cache
 func TestCacheCreation(t *testing.T) {
@@ -153,11 +148,15 @@ func TestAddGetCacheablePage(t *testing.T) {
 		"b.db": struct{}{},
 	}
 
-	cache, err := New(groupPathes)
+	cache, err := New(groupPathes, WithMetaCache(128))
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
 	defer cache.Close()
+
+	if cache.metaCache == nil {
+		t.Fatal("Meta cache isn't set")
+	}
 
 	page := randomPage()
 	err = cache.AddPage(matched, page)
@@ -175,12 +174,16 @@ func TestAddGetCacheablePage(t *testing.T) {
 			group: struct{}{},
 		}, req)
 		if err != nil {
-			t.Errorf("Failed to get a page from a cache for group %s, got `%s`", group, pageCached)
+			t.Errorf("Failed to get a page from a cache for group %s", group)
 		}
 
 		if !pageCached.Equal(page) {
-			t.Errorf("Page isn't equal to the original one for group %s, got `%s`", group, pageCached)
+			t.Errorf("Page isn't equal to the original one for group %s", group)
 		}
+	}
+
+	if cache.metaCache.Len() == 0 {
+		t.Fatal("No pages are cached")
 	}
 }
 
@@ -227,11 +230,18 @@ func TestUpdateGetPage(t *testing.T) {
 		"b.db": struct{}{},
 	}
 
-	cache, err := New(groupPathes)
+	cache, err := New(
+		groupPathes,
+		WithMetaCache(128),
+	)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
 	defer cache.Close()
+
+	if cache.metaCache == nil {
+		t.Fatal("Meta cache isn't set")
+	}
 
 	pageOld := randomPage()
 	pageOld.Content = []byte("Old")
@@ -284,11 +294,18 @@ func TestDeletePage(t *testing.T) {
 		"b.db": struct{}{},
 	}
 
-	cache, err := New(groupPathes)
+	cache, err := New(
+		groupPathes,
+		WithMetaCache(128),
+	)
 	if err != nil {
 		t.Fatalf("Failed to create a cache: %s", err)
 	}
 	defer cache.Close()
+
+	if cache.metaCache == nil {
+		t.Fatal("Meta cache isn't set")
+	}
 
 	page := randomPage()
 	err = cache.AddPage(matched, page)
@@ -314,4 +331,110 @@ func TestDeletePage(t *testing.T) {
 			t.Errorf("Got a page from a cache after deletion for group %s", group)
 		}
 	}
+}
+
+// Test cache method fallback for the HEAD method
+func TestMethodFallbackHead(t *testing.T) {
+	dir := t.TempDir()
+	groupPathes := map[string]string{
+		"a.db": filepath.Join(dir, "a.db"),
+		"b.db": filepath.Join(dir, "b.db"),
+	}
+	matched := map[string]struct{}{
+		"a.db": struct{}{},
+		"b.db": struct{}{},
+	}
+
+	cache, err := New(groupPathes, WithMetaCache(128))
+	if err != nil {
+		t.Fatalf("Failed to create a cache: %s", err)
+	}
+	defer cache.Close()
+
+	if cache.metaCache == nil {
+		t.Fatal("Meta cache isn't set")
+	}
+
+	page := randomPage()
+	page.Method = "GET"
+
+	err = cache.AddPage(matched, page)
+	if err != nil {
+		t.Fatalf("Failed to add a page to a cache: %s", err)
+	}
+
+	req, err := http.NewRequest("HEAD", page.URL, http.NoBody)
+	if err != nil {
+		t.Errorf("Failed to create a new request %s", err)
+	}
+
+	for group := range matched {
+		pageCached, err := cache.GetPage(map[string]struct{}{
+			group: struct{}{},
+		}, req)
+		if err != nil {
+			t.Errorf("Failed to get a page from a cache for group %s", group)
+		}
+
+		expected := page
+		expected.Method = "HEAD"
+		expected.Content = []byte{}
+		if !pageCached.Equal(expected) {
+			t.Errorf("Page isn't equal to the original one for group %s", group)
+		}
+	}
+
+	if cache.metaCache.Len() == 0 {
+		t.Fatal("No pages are cached")
+	}
+}
+
+func FuzzEqualPages(f *testing.F) {
+	f.Add(
+		"https://example.com",
+		"GET",
+		http.StatusOK,
+		[]byte{},
+		[]byte{},
+		`"Etag"`,
+		`Tue, 20 Oct 2015 07:29:20 GMT`,
+	)
+	f.Add(
+		"http://example.org",
+		"POST",
+		http.StatusPreconditionFailed,
+		[]byte("Headers"),
+		[]byte("Content"),
+		``,
+		``,
+	)
+
+	f.Fuzz(func(t *testing.T, url, method string, statusCode int, headers, content []byte, etag, lastModified string) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("Panicked with url=%q, method=%q, statusCode=%d, headers=%q, content=%q, etag=%q, lastModified=%q: %v",
+					url, method, statusCode, headers, content, etag, lastModified, r)
+			}
+		}()
+
+		page := Page{
+			url,
+			method,
+			statusCode,
+			headers,
+			content,
+			etag,
+			lastModified,
+		}
+
+		if !page.Equal(page) {
+			t.Fatal("Page isn't equal to itself")
+		}
+
+		page2 := page
+		page2.StatusCode = page.StatusCode + 1
+		if page.Equal(page2) {
+			t.Fatal("Pages with different status codes are equal")
+		}
+	})
 }
