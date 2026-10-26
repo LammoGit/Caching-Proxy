@@ -50,15 +50,19 @@ groups:
 
 // Check FilterMatch to string conversion
 func TestFilterMatchString(t *testing.T) {
-	for k, v := range map[FilterMatch]string{
-		MatchBlackList: "blacklisted",
-		MatchWhiteList: "whitelisted",
-		MatchNeither:   "neither",
-		-1:             "unknown",
-	} {
-		s := k.String()
-		if s != v {
-			t.Errorf("Invalid result of conversion, got `%s`, expected `%s`", s, v)
+	tests := []struct {
+		match FilterMatch
+		text  string
+	}{
+		{MatchBlackList, "blacklisted"},
+		{MatchWhiteList, "whitelisted"},
+		{MatchNeither, "neither"},
+		{-1, "unknown"},
+	}
+	for _, v := range tests {
+		text := v.match.String()
+		if text != v.text {
+			t.Errorf("got `%s`, expected `%s`", text, v.text)
 		}
 	}
 }
@@ -165,70 +169,6 @@ func TestCreateFilterWithInvalidWhitelistPath(t *testing.T) {
 	}
 }
 
-func TestCreateWithInvalidStoragePath(t *testing.T) {}
-
-// // Create a new filter with invalid whitelist patterns
-// func TestCreateFilterWithInvalidWhitelistPatterns(t *testing.T) {
-// 	dir := t.TempDir()
-// 	configPath := filepath.Join(dir, "filter.yml")
-//
-// 	data := []byte(`
-// storage_path: "./db"
-// groups:
-//   - filename: "db.db"
-//     whitelist:
-//       - "^*+?|"
-// `)
-// 	if err := os.WriteFile(configPath, data, 0644); err != nil {
-// 		t.Fatalf("Failed to write bytes into filter config file: %s", err)
-// 	}
-//
-// 	filter, err := New(configPath)
-// 	if err != nil {
-// 		t.Fatalf("Failed to create a filter: %s", err)
-// 	}
-//
-// 	group, ok := filter.Groups["db.db"]
-// 	if !ok {
-// 		t.Fatal("Group wasn't created")
-// 	}
-//
-// 	if group.WhiteRegex != nil {
-// 		t.Fatalf("Regex pattern is compiled from invalid patterns")
-// 	}
-// }
-//
-// // Create a new filter with invalid blacklist patterns
-// func TestCreateFilterWithInvalidBlacklistPatterns(t *testing.T) {
-// 	dir := t.TempDir()
-// 	configPath := filepath.Join(dir, "filter.yml")
-//
-// 	data := []byte(`
-// storage_path: "./db"
-// groups:
-//   - filename: "db.db"
-//     blacklist:
-//       - "^*+?|"
-// `)
-// 	if err := os.WriteFile(configPath, data, 0644); err != nil {
-// 		t.Fatalf("Failed to write bytes into filter config file: %s", err)
-// 	}
-//
-// 	filter, err := New(configPath)
-// 	if err != nil {
-// 		t.Fatalf("Failed to create a filter: %s", err)
-// 	}
-//
-// 	group, ok := filter.Groups["db.db"]
-// 	if !ok {
-// 		t.Fatal("Group wasn't created")
-// 	}
-//
-// 	if group.BlackRegex != nil {
-// 		t.Fatalf("Regex pattern is compiled from invalid patterns")
-// 	}
-// }
-
 // Create a new filtering group with invalid and valid patterns
 func TestCreateFilterGroupWithInvalidAndValidPatterns(t *testing.T) {
 	group, err := NewFilterGroup(FilterGroupConfig{
@@ -244,15 +184,20 @@ func TestCreateFilterGroupWithInvalidAndValidPatterns(t *testing.T) {
 		t.Fatalf("Regex pattern isn't compiled from partially invalid patterns")
 	}
 
-	for k, v := range map[string]FilterMatch{
-		"whitelisted": MatchWhiteList,
-		"blacklisted": MatchBlackList,
-		"both":        MatchBlackList,
-		"neither":     MatchNeither,
-	} {
-		match := group.Match(k)
-		if match != v {
-			t.Errorf("Invalid match result for %s got `%s` and expected `%s`", k, match, v)
+	tests := []struct {
+		text  string
+		match FilterMatch
+	}{
+		{"whitelisted", MatchWhiteList},
+		{"blacklisted", MatchBlackList},
+		{"both", MatchBlackList},
+		{"neither", MatchNeither},
+	}
+
+	for _, v := range tests {
+		match := group.Match(v.text)
+		if match != v.match {
+			t.Errorf("Match(%s) = `%s`; expected `%s`", v.text, match, v.match)
 		}
 	}
 }

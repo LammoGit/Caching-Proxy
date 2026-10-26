@@ -169,7 +169,8 @@ func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyTypeString, key
 	// Create a saving channel with a worker group and start workers
 	proxy.saveCh = make(chan saveJob, DefaultSavingBufferSize)
 	for i := 0; i < DefaultSavingWorkers; i++ {
-		proxy.saveWg.Go(proxy.saveWorker)
+		proxy.saveWg.Add(1)
+		go proxy.saveWorker()
 	}
 
 	proxy.Server = &http.Server{
