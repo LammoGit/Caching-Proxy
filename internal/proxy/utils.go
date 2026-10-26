@@ -14,7 +14,7 @@ func normalizeProxyAddr(raw string) (*url.URL, error) {
 		return nil, nil
 	}
 	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
+		raw = "https://" + raw
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -39,10 +39,12 @@ func proxyFromEnv(targetHost string) *url.URL {
 	}
 
 	var keys []string
-	if port == "443" {
-		keys = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"}
+	if port == "80" {
+		keys = []string{"http_proxy", "HTTP_PROXY"}
+	} else if port == "443" {
+		keys = []string{"https_proxy", "HTTPS_PROXY"}
 	} else {
-		keys = []string{"HTTP_PROXY", "http_proxy"}
+		keys = []string{"https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"}
 	}
 
 	for _, k := range keys {

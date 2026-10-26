@@ -38,34 +38,100 @@ groups:
 	listenAddr = "localhost:0"
 )
 
-/* Utility Functions */
-
-func createProxy(t *testing.T, opts ...Option) (*Proxy, error) {
+// Helper function for creating a proxy
+func createProxy(t *testing.T, args ...map[string]any) (*Proxy, error) {
 	t.Helper()
 
 	dir := t.TempDir()
+
+	// Default values
+	listenAddr := listenAddr
 	dbPath := filepath.Join(dir, "cache")
 	filterPath := filepath.Join(dir, "filter.yml")
-	certPath := filepath.Join(dir, "cert.txt")
-	keyPath := filepath.Join(dir, "key.txt")
+	keyPath := filepath.Join(dir, "cert.key")
+	certPath := filepath.Join(dir, "cert.crt")
+	proxyAddr := ""
+	keyTypeString := "ecdsa"
+	var opts []Option
 
-	if err := os.WriteFile(filterPath, filterConfigBytes, 0644); err != nil {
-		return nil, err
+	var kwargs map[string]any
+	if len(args) == 0 {
+		kwargs = make(map[string]any)
+	} else {
+		kwargs = args[0]
+	}
+
+	// If `keyPath` is set, then change variables value
+	if keyPathAny, ok := kwargs["keyPath"]; ok {
+		keyPath, ok = keyPathAny.(string)
+		if !ok {
+			return nil, errors.New("keyPath argument must have type string")
+		}
+	}
+
+	// If `certPath` is set, then change variables value
+	if certPathAny, ok := kwargs["certPath"]; ok {
+		certPath, ok = certPathAny.(string)
+		if !ok {
+			return nil, errors.New("certPath argument must have type string")
+		}
+	}
+
+	// If `proxyAddr` is set, then change variables value
+	if proxyAddrAny, ok := kwargs["proxyAddr"]; ok {
+		proxyAddr, ok = proxyAddrAny.(string)
+		if !ok {
+			return nil, errors.New("proxyAddr argument must have type string")
+		}
+	}
+
+	// If `filterPath` is set, then change variables value
+	if filterPathAny, ok := kwargs["filterPath"]; ok {
+		filterPath, ok = filterPathAny.(string)
+		if !ok {
+			return nil, errors.New("filterPath argument must have type string")
+		}
+	} else {
+		if err := os.WriteFile(filterPath, filterConfigBytes, 0644); err != nil {
+			return nil, err
+		}
+	}
+
+	// If `dbPath` is set, then change variables value
+	if dbPathAny, ok := kwargs["dbPath"]; ok {
+		dbPath, ok = dbPathAny.(string)
+		if !ok {
+			return nil, errors.New("dbPath argument must have type string")
+		}
+	}
+
+	// If `keyTypeAny` is set, then change variables value
+	if keyTypeAny, ok := kwargs["keyTypeString"]; ok {
+		keyTypeString, ok = keyTypeAny.(string)
+		if !ok {
+			return nil, errors.New("keyTypeString argument must have type string")
+		}
+	}
+
+	// If `optsAny` is set, then change variables value
+	if optsAny, ok := kwargs["opts"]; ok {
+		opts, ok = optsAny.([]Option)
+		if !ok {
+			return nil, errors.New("opts argument must have type []Option")
+		}
 	}
 
 	return New(
 		listenAddr,
-		"",
+		proxyAddr,
 		filterPath,
 		dbPath,
 		certPath,
-		"ecdsa",
+		keyTypeString,
 		keyPath,
 		opts...,
 	)
 }
-
-/* Proxy Tests */
 
 // Create a new Proxy
 func TestProxyCreation(t *testing.T) {
@@ -79,7 +145,11 @@ func TestProxyCreation(t *testing.T) {
 // Create a new Proxy with a logger
 func TestProxyCreationWithLogger(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	proxy, err := createProxy(t, WithLogger(logger))
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithLogger(logger),
+		},
+	})
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -92,7 +162,12 @@ func TestProxyCreationWithLogger(t *testing.T) {
 
 // Create a new Proxy with a nil logger
 func TestProxyCreationWithNilLogger(t *testing.T) {
-	proxy, err := createProxy(t, WithLogger(nil))
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithLogger(nil),
+		},
+	})
+
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -105,7 +180,12 @@ func TestProxyCreationWithNilLogger(t *testing.T) {
 
 // Create a new Proxy with positive signer cache size
 func TestProxyCreationWithSignerCache(t *testing.T) {
-	proxy, err := createProxy(t, WithSignerCache(1))
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithSignerCache(1),
+		},
+	})
+
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -114,7 +194,12 @@ func TestProxyCreationWithSignerCache(t *testing.T) {
 
 // Create a new Proxy with negative signer cache size
 func TestProxyCreationWithNegativeSignerCache(t *testing.T) {
-	proxy, err := createProxy(t, WithSignerCache(-1))
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithSignerCache(-1),
+		},
+	})
+
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -124,7 +209,12 @@ func TestProxyCreationWithNegativeSignerCache(t *testing.T) {
 // Create a new Proxy with http.Client
 func TestProxyCreationWithClient(t *testing.T) {
 	client := &http.Client{}
-	proxy, err := createProxy(t, WithClient(client))
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithClient(client),
+		},
+	})
+
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -138,7 +228,12 @@ func TestProxyCreationWithClient(t *testing.T) {
 // Create a new Proxy with http.Transport
 func TestProxyCreationWithTransport(t *testing.T) {
 	transport := &http.Transport{}
-	proxy, err := createProxy(t, WithTransport(transport))
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithTransport(transport),
+		},
+	})
+
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -151,7 +246,12 @@ func TestProxyCreationWithTransport(t *testing.T) {
 
 // Create a new Proxy with a nil http.Transport
 func TestProxyCreationWithNilTransport(t *testing.T) {
-	proxy, err := createProxy(t, WithTransport(nil))
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithTransport(nil),
+		},
+	})
+
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -214,12 +314,18 @@ func TestHTTPRequest(t *testing.T) {
 		fmt.Fprintln(w, "Page Content")
 	}))
 
-	proxy, err := createProxy(t, WithClient(ts.Client()))
+	// Creating proxy with client of the test server
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithClient(ts.Client()),
+		},
+	})
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
 	defer proxy.Close()
 
+	// Create request and response recorder
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodGet,
@@ -227,6 +333,7 @@ func TestHTTPRequest(t *testing.T) {
 		nil,
 	)
 
+	// Pass recorder and request to the proxy
 	proxy.Server.Handler.ServeHTTP(rec, req)
 
 	res := rec.Result()
@@ -249,12 +356,18 @@ func TestHTTPSRequest(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	proxy, err := createProxy(t, WithClient(ts.Client()))
+	// Creating proxy with client of the test server
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithClient(ts.Client()),
+		},
+	})
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
 	defer proxy.Close()
 
+	// Create proxy server and pass its URL as proxy for a client
 	proxyServer := httptest.NewServer(proxy.Server.Handler)
 	defer proxyServer.Close()
 
@@ -268,6 +381,7 @@ func TestHTTPSRequest(t *testing.T) {
 
 	client := &http.Client{Transport: transport}
 
+	// Send a GET request using the client
 	res, err := client.Get(ts.URL)
 	if err != nil {
 		t.Fatalf("Failed to execute request through proxy: %s", err)
@@ -292,10 +406,7 @@ func TestBlacklistedHTTPSRequest(t *testing.T) {
 	defer ts.Close()
 
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "cache")
 	filterPath := filepath.Join(dir, "filter.yml")
-	certPath := filepath.Join(dir, "cert.txt")
-	keyPath := filepath.Join(dir, "key.txt")
 
 	data := []byte(`
 groups:
@@ -307,20 +418,16 @@ groups:
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
 
-	proxy, err := New(
-		listenAddr,
-		"",
-		filterPath,
-		dbPath,
-		certPath,
-		"ecdsa",
-		keyPath,
-	)
+	// Creating proxy with client of the test server
+	proxy, err := createProxy(t, map[string]any{
+		"filterPath": filterPath,
+	})
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
 	defer proxy.Close()
 
+	// Create proxy server and pass its URL as proxy for a client
 	proxyServer := httptest.NewServer(proxy.Server.Handler)
 	defer proxyServer.Close()
 
@@ -334,6 +441,7 @@ groups:
 
 	client := &http.Client{Transport: transport}
 
+	// Send a GET request using the client
 	res, err := client.Get(ts.URL)
 	if err != nil {
 		t.Fatalf("Failed to execute request through proxy: %s", err)
@@ -356,12 +464,18 @@ func TestHTTPRequestReturnCached(t *testing.T) {
 		fmt.Fprintln(w, "Page Content")
 	}))
 
-	proxy, err := createProxy(t, WithClient(ts.Client()))
+	// Creating proxy with client of the test server
+	proxy, err := createProxy(t, map[string]any{
+		"opts": []Option{
+			WithClient(ts.Client()),
+		},
+	})
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
 	defer proxy.Close()
 
+	// Create request and response recorder
 	recOnline := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodGet,
@@ -385,6 +499,7 @@ func TestHTTPRequestReturnCached(t *testing.T) {
 
 	ts.Close()
 
+	// Create a response for offline request
 	recOffline := httptest.NewRecorder()
 	proxy.Server.Handler.ServeHTTP(recOffline, req)
 
@@ -392,6 +507,7 @@ func TestHTTPRequestReturnCached(t *testing.T) {
 	bodyOffline, _ := io.ReadAll(resOffline.Body)
 	defer resOffline.Body.Close()
 
+	// Check that cached body is equal to the received one
 	if !bytes.Equal(bodyOnline, bodyOffline) {
 		t.Errorf("Cached page isn't equal to the one received online")
 	}
@@ -420,15 +536,13 @@ groups:
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
 
-	secondProxy, err := New(
-		listenAddr,
-		"",
-		filterPath,
-		dbPath,
-		certPath,
-		"ecdsa",
-		keyPath,
-	)
+	secondProxy, err := createProxy(t, map[string]any{
+		"listenAddr": listenAddr,
+		"filterPath": filterPath,
+		"dbPath":     dbPath,
+		"certPath":   certPath,
+		"keyPath":    keyPath,
+	})
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -440,12 +554,6 @@ groups:
 	certPath = filepath.Join(dir, "cert.txt")
 	keyPath = filepath.Join(dir, "key.txt")
 
-	data = []byte(`
-groups:
-  - filename: "db.db"
-    blacklist:
-      - ".*"
-`)
 	if err := os.WriteFile(filterPath, data, 0644); err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
@@ -454,20 +562,21 @@ groups:
 	defer secondProxyServer.Close()
 	secondProxyURL, _ := url.Parse(secondProxyServer.URL)
 
-	firstProxy, err := New(
-		listenAddr,
-		secondProxyURL.String(),
-		filterPath,
-		dbPath,
-		certPath,
-		"ecdsa",
-		keyPath,
-	)
+	firstProxy, err := createProxy(t, map[string]any{
+		"listenAddr": listenAddr,
+		"proxyAddr":  secondProxyURL.String(),
+		"filterPath": filterPath,
+		"dbPath":     dbPath,
+		"certPath":   certPath,
+		"keyPath":    keyPath,
+	})
+
 	if err != nil {
 		t.Fatalf("Failed to create a proxy: %s", err)
 	}
 	defer firstProxy.Close()
 
+	// Chain proxies and connect client to the entry proxy
 	proxyServer := httptest.NewServer(firstProxy.Server.Handler)
 	defer proxyServer.Close()
 
@@ -481,6 +590,7 @@ groups:
 
 	client := &http.Client{Transport: transport}
 
+	// Send a GET request usign the client
 	res, err := client.Get(ts.URL)
 	if err != nil {
 		t.Fatalf("Failed to execute request through proxy: %s", err)

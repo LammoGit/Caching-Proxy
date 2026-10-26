@@ -29,19 +29,19 @@ import (
 
 // ProxySettings stores settings of a Proxy object
 type ProxySettings struct {
-	ProxyURL   *url.URL
-	ListenAddr string
-	FilterPath string
-	CertPath   string
-	KeyPath    string
-	cacheSize  int
-	certPool   *x509.CertPool
+	ProxyURL   *url.URL       // URL of a proxy to send requests through
+	ListenAddr string         // Address to listen from
+	FilterPath string         // Path to a filter config file
+	CertPath   string         // Path to a certificate file
+	KeyPath    string         // Path to a private key file
+	cacheSize  int            // Size of a cache
+	certPool   *x509.CertPool // Pool of verified certificates
 }
 
 // saveJob is a queued cache write produced by forwardRequest
 type saveJob struct {
-	matched map[string]struct{}
-	page    cache.Page
+	matched map[string]struct{} // Set of matched groups
+	page    cache.Page          // Page to save
 }
 
 // Proxy represents caching proxy
@@ -54,9 +54,9 @@ type Proxy struct {
 	signer   *signer.Signer
 	logger   *slog.Logger
 
-	saveCh    chan saveJob
-	saveWg    sync.WaitGroup
-	closeOnce sync.Once
+	saveCh    chan saveJob   // Channel for saving pages jobs
+	saveWg    sync.WaitGroup // Saving waiting group
+	closeOnce sync.Once      // Function that closes server once
 }
 
 // New returns a pointer to a new Proxy object
@@ -66,7 +66,7 @@ func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyTypeString, key
 
 	proxyURL, err := normalizeProxyAddr(proxyAddr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid proxy address: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrIvalidProxyAddress, err)
 	}
 	proxy.Settings = ProxySettings{
 		ProxyURL:   proxyURL,
@@ -76,18 +76,20 @@ func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyTypeString, key
 		KeyPath:    keyPath,
 	}
 
+	// Take system certificates or create a new empty pool
 	pool, err := x509.SystemCertPool()
 	if err != nil {
 		pool = x509.NewCertPool()
 	}
 
+	// Add proxy certificate to the verified certificate pool
 	innerCA, err := os.ReadFile(certPath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("read inner CA: %w", err)
+			return nil, fmt.Errorf("%w: %w", ErrFailedReadCertificiate, err)
 		}
 	} else if !pool.AppendCertsFromPEM(innerCA) {
-		return nil, errors.New("inner CA file contained no certificates")
+		return nil, ErrNoCertificates
 	}
 	proxy.Settings.certPool = pool
 
@@ -103,6 +105,7 @@ func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyTypeString, key
 		return nil, err
 	}
 
+	// Get key type based on the passed string
 	var keyType signer.KeyType
 	switch strings.ToLower(keyTypeString) {
 	case "rsa":
@@ -163,10 +166,10 @@ func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyTypeString, key
 		}
 	}
 
-	proxy.saveCh = make(chan saveJob, 256)
-	for i := 0; i < 4; i++ {
-		proxy.saveWg.Add(1)
-		go proxy.saveWorker()
+	// Create a saving channel with a worker group and start workers
+	proxy.saveCh = make(chan saveJob, DefaultSavingBufferSize)
+	for i := 0; i < DefaultSavingWorkers; i++ {
+		proxy.saveWg.Go(proxy.saveWorker)
 	}
 
 	proxy.Server = &http.Server{
@@ -188,7 +191,7 @@ func New(listenAddr, proxyAddr, filterPath, dbPath, certPath, keyTypeString, key
 // Run prints out info about Proxy and starts listening
 func (proxy *Proxy) Run() error {
 	if proxy.Server == nil {
-		return errors.New("tried to run the Proxy with nil Server")
+		return ErrRunNilServer
 	}
 
 	fmt.Printf("Starting proxy on address: %s\n", proxy.Settings.ListenAddr)
@@ -290,6 +293,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 	}
 	defer clientConn.Close()
 
+	// If all blocked, then don't decrypt
 	url := req.URL
 	matchedURL := proxy.filter.Match(url.String())
 	if len(matchedURL) == 0 {
@@ -337,11 +341,13 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Send that connection is established
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		proxy.logger.Error("Failed to write connection established")
 		return
 	}
 
+	// Generate leaf certificate for the requested domain
 	cert, err := proxy.signer.GenerateLeafCertificate(*url)
 	if err != nil {
 		proxy.logger.Error("failed to generate certificate",
@@ -350,6 +356,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Create a TLS server with the generated leaf certificate and TCP connection
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{*cert}}
 	tlsConn := tls.Server(clientConn, tlsConfig)
 	defer tlsConn.Close()
@@ -370,6 +377,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, req *http.Request) {
 		inReq.URL.Host = inReq.Host
 		inReq.RequestURI = ""
 
+		// Get set of matching groups
 		matchedURL = proxy.filter.Match(inReq.URL.String())
 		matchedReferer := proxy.filter.Match(inReq.Header.Get("Referer"))
 		matched := make(map[string]struct{})
